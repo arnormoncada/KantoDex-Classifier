@@ -21,8 +21,10 @@ dependencies:
   - tqdm
   - python-dotenv
   - torchmetrics
+  - graphviz
   - pip:
     - kaggle
     - tensorboard
     - torch-tb-profiler
     - tensorboard-plugin-profile
+    - torchviz

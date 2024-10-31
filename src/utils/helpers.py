@@ -3,6 +3,7 @@ from pathlib import Path
 
 import torch
 from torch import nn, optim
+from torch.amp import GradScaler
 from torch.optim.lr_scheduler import _LRScheduler
 
 
@@ -12,6 +13,7 @@ def save_checkpoint(  # noqa: PLR0913
     epoch: int,
     checkpoint_dir: str,
     scheduler: _LRScheduler | None = None,
+    scaler: GradScaler | None = None,
     is_best: bool = False,
     best_accuracy: float | None = None,
 ) -> None:
@@ -24,19 +26,20 @@ def save_checkpoint(  # noqa: PLR0913
         epoch (int): Current epoch number.
         checkpoint_dir (str): Directory to save checkpoints.
         scheduler (_LRScheduler, optional): Learning rate scheduler.
+        scaler (GradScaler, optional): Gradient scaler for mixed precision.
         is_best (bool, optional): Flag indicating if this is the best model so far.
         best_accuracy (float, optional): Best validation accuracy.
 
     """
     checkpoint_path = Path(checkpoint_dir)
     checkpoint_path.mkdir(parents=True, exist_ok=True)
-
     checkpoint = {
         "epoch": epoch + 1,
         "model_state_dict": model.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
+        "scaler_state_dict": scaler.state_dict() if scaler else None,
+        "best_accuracy": best_accuracy,
     }
-
     if scheduler:
         checkpoint["scheduler_state_dict"] = scheduler.state_dict()
 

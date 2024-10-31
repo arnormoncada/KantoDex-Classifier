@@ -3,7 +3,6 @@ import random
 from collections.abc import Callable
 from functools import partial
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import torch
@@ -41,7 +40,7 @@ class PokemonDataset(Dataset):
         self.labels = labels
         self.augment = augment
         self.transform = transform
-        self.augmentor = DataAugmentor() if augment else None
+        self.augmentor = augmentor if augmentor else (DataAugmentor() if augment else None)
 
     def __len__(self) -> int:
         """
@@ -53,7 +52,7 @@ class PokemonDataset(Dataset):
         """
         return len(self.image_paths)
 
-    def __getitem__(self, idx: int) -> tuple[Any, int]:
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, int]:
         """
         Retrieve the image and label at the specified index.
 
@@ -61,7 +60,7 @@ class PokemonDataset(Dataset):
             idx (int): Index of the sample.
 
         Returns:
-            Tuple[Any, int]: (image, label)
+            Tuple[torch.Tensor, int]: (image, label)
 
         """
         img_path = self.image_paths[idx]
@@ -108,7 +107,7 @@ def collate_fn(
     """
     images, labels = zip(*batch, strict=False)
     # Resize images to the same size
-    images = [transforms.functional.resize(img, (224, 224)) for img in images]
+    # images = [transforms.functional.resize(img, (224, 224)) for img in images]
     images = torch.stack(images)
     labels = torch.tensor(labels)
 
@@ -117,14 +116,11 @@ def collate_fn(
 
     if use_cutmix and random.random() < CUTMIX_PROBABILITY:
         lam = rng.beta(alpha, alpha)
-        batch_size = images.size(0)
+        batch_size, C, H, W = images.size()
         index = torch.randperm(batch_size)
-
         shuffled_images = images[index]
         shuffled_labels = labels[index]
 
-        # Determine the size of the patch
-        W, H = images.size(3), images.size(2)
         cut_rat = np.sqrt(1.0 - lam)
         cut_w = int(W * cut_rat)
         cut_h = int(H * cut_rat)
@@ -142,27 +138,24 @@ def collate_fn(
 
         # Adjust lambda based on the actual area of the patch
         lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (W * H))
-
         labels = lam * labels.float() + (1 - lam) * shuffled_labels.float()
 
     elif use_mixup and random.random() < CUTMIX_PROBABILITY:
         lam = rng.beta(alpha, alpha)
         batch_size = images.size(0)
         index = torch.randperm(batch_size)
-
         shuffled_images = images[index]
         shuffled_labels = labels[index]
 
         images = lam * images + (1 - lam) * shuffled_images
         labels = lam * labels.float() + (1 - lam) * shuffled_labels.float()
-
     else:
         labels = labels.float()
 
     return images, labels
 
 
-def load_data(
+def load_data(  # noqa: PLR0913
     processed_path: str,
     test_size: float = 0.2,
     batch_size: int = 32,
@@ -242,16 +235,17 @@ def load_data(
         ],
     )
 
-    # Create datasets
+    augmentor = DataAugmentor(img_size=img_size) if use_cutmix or use_mixup else None
+
     train_dataset = PokemonDataset(
         train_paths,
         train_labels,
         augment=True,
         transform=transform_train,
+        augmentor=augmentor,
     )
     val_dataset = PokemonDataset(val_paths, val_labels, augment=False, transform=transform_val)
 
-    # Prepare partial collate_fn with desired parameters
     partial_collate_fn = partial(
         collate_fn,
         use_cutmix=use_cutmix,
@@ -259,13 +253,13 @@ def load_data(
         alpha=alpha,
     )
 
-    # Create dataloaders with MixUp and CutMix
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
         shuffle=True,
         num_workers=num_workers,
         pin_memory=True,
+        prefetch_factor=2,
         collate_fn=partial_collate_fn,
     )
     val_loader = DataLoader(
@@ -274,6 +268,7 @@ def load_data(
         shuffle=False,
         num_workers=num_workers,
         pin_memory=True,
+        prefetch_factor=2,
         collate_fn=partial_collate_fn,
     )
 

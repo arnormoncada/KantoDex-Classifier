@@ -15,6 +15,8 @@ from tqdm import tqdm
 from src.data.data_loader import collate_fn, load_data
 from src.models.model import KantoDexClassifier
 from src.utils.helpers import save_checkpoint
+from src.utils.metrics import MetricsCalculator
+from src.visualization.visualize_model import visualize_model_structure
 
 
 def parse_args() -> argparse.Namespace:
@@ -36,6 +38,11 @@ def parse_args() -> argparse.Namespace:
         "--resume",
         action="store_true",
         help="Flag to resume training from the latest checkpoint.",
+    )
+    parser.add_argument(
+        "--visualize_model",
+        action="store_true",
+        help="Visualize the model architecture.",
     )
     return parser.parse_args()
 
@@ -220,11 +227,12 @@ def initialize_scheduler(
     return scheduler
 
 
-def resume_training(
+def resume_training(  # noqa: PLR0913
     config: dict[str, Any],
     model: nn.Module,
     optimizer: optim.Optimizer,
     scheduler: optim.lr_scheduler._LRScheduler | None,
+    scaler: GradScaler,
     device: torch.device,
 ) -> tuple[int, float]:
     """
@@ -235,6 +243,7 @@ def resume_training(
         model (nn.Module): The model.
         optimizer (optim.Optimizer): The optimizer.
         scheduler (Optional[_LRScheduler]): The scheduler.
+        scaler (GradScaler): The gradient scaler.
         device (torch.device): Device to load the checkpoint on.
 
     Returns:
@@ -249,6 +258,7 @@ def resume_training(
         checkpoint = torch.load(latest_checkpoint, map_location=device)
         model.load_state_dict(checkpoint["model_state_dict"])
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        scaler.load_state_dict(checkpoint["scaler_state_dict"])
         if scheduler and "scheduler_state_dict" in checkpoint:
             scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
         start_epoch = checkpoint["epoch"]
@@ -268,6 +278,7 @@ def train_epoch(  # noqa:  PLR0913
     optimizer: optim.Optimizer,
     device: torch.device,
     scaler: GradScaler,
+    metrics_calculator: Any,
     use_cutmix: bool = False,
     use_mixup: bool = False,
     alpha: float = 1.0,
@@ -282,6 +293,7 @@ def train_epoch(  # noqa:  PLR0913
         optimizer (optim.Optimizer): Optimizer.
         device (torch.device): Device to train on.
         scaler (GradScaler): Gradient scaler for mixed precision.
+        metrics_calculator (Any): Metrics calculator.
         use_cutmix (bool, optional): Flag to use CutMix augmentation.
         use_mixup (bool, optional): Flag to use MixUp augmentation.
         alpha (float, optional): Alpha parameter for CutMix and MixUp.
@@ -292,8 +304,6 @@ def train_epoch(  # noqa:  PLR0913
     """
     model.train()
     running_loss = 0.0
-    correct = 0
-    total = 0
 
     for batch in tqdm(dataloader, desc="Training", unit="batch"):
         images, labels = batch
@@ -318,21 +328,18 @@ def train_epoch(  # noqa:  PLR0913
         scaler.update()
 
         running_loss += loss.item()
-
-        # **Calculate Accuracy**
-        _, predicted = torch.max(outputs.data, 1)
-        total += labels.size(0)
-        correct += (predicted == labels).sum().item()
+        metrics_calculator.update(outputs, labels)
 
     avg_loss = running_loss / len(dataloader)
-    accuracy = 100 * correct / total
-    return avg_loss, accuracy  # Return both loss and accuracy
+    metrics = metrics_calculator.compute()
+    return avg_loss, metrics["accuracy"]
 
 
 def validate(
     model: nn.Module,
     dataloader: DataLoader,
     device: torch.device,
+    metrics_calculator: Any,
 ) -> float:
     """
     Validate the model.
@@ -341,25 +348,23 @@ def validate(
         model (nn.Module): The model.
         dataloader (DataLoader): Validation data loader.
         device (torch.device): Device to validate on.
+        metrics_calculator (Any): Metrics calculator.
 
     Returns:
         float: Validation accuracy in percentage.
 
     """
     model.eval()
-    correct = 0
-    total = 0
+    metrics_calculator.reset()
     with torch.no_grad():
         for batch in tqdm(dataloader, desc="Validation", unit="batch"):
             images, labels = batch
             images = images.to(device)
             labels = labels.to(device)
             outputs = model(images)
-            _, predicted = torch.max(outputs.data, 1)
-            total += labels.size(0)
-            correct += (predicted == labels).sum().item()
-    accuracy = 100 * correct / total
-    return accuracy  # noqa: RET504
+            metrics_calculator.update(outputs, labels)
+    metrics = metrics_calculator.compute()
+    return metrics["accuracy"]
 
 
 def main() -> None:  # noqa: PLR0915
@@ -393,25 +398,38 @@ def main() -> None:  # noqa: PLR0915
     label_smoothing = config["training"].get("label_smoothing", 0.1)
     criterion = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
 
+    metrics_calculator = MetricsCalculator(num_classes=num_classes)
+
     # TensorBoard writer
     writer = SummaryWriter(log_dir="runs")
 
-    # Mixed Precision
+    # Mixed Precision Scaler
     scaler = GradScaler("cuda", enabled=device.type == "cuda")
 
     # Early Stopping parameters
     early_stopping_patience = config["training"].get("early_stopping_patience", 10)
     epochs_no_improve = 0
+    best_accuracy = 0.0
 
     # Resume training if flag is set
-    start_epoch, best_accuracy = 0, 0.0
+    start_epoch = 0
     if args.resume:
-        start_epoch, best_accuracy = resume_training(config, model, optimizer, scheduler, device)
+        start_epoch, best_accuracy = resume_training(
+            config,
+            model,
+            optimizer,
+            scheduler,
+            scaler,
+            device,
+        )
+
+    # Visualize model structure if flag is set
+    if args.visualize_model:
+        visualize_model_structure(model)
 
     num_epochs = config["training"]["epochs"]
     for epoch in range(start_epoch, num_epochs):
         logging.info(f"Starting epoch {epoch + 1}/{num_epochs}")
-        writer.add_scalar("Epoch", epoch + 1, epoch + 1)
 
         # Train
         train_loss, train_accuracy = train_epoch(
@@ -421,6 +439,7 @@ def main() -> None:  # noqa: PLR0915
             optimizer,
             device,
             scaler,
+            metrics_calculator,
             use_cutmix=config["training"].get("use_cutmix", False),
             use_mixup=config["training"].get("use_mixup", False),
             alpha=config["training"].get("alpha", 1.0),
@@ -431,15 +450,25 @@ def main() -> None:  # noqa: PLR0915
         writer.add_scalar("Training Loss", train_loss, epoch + 1)
         writer.add_scalar("Training Accuracy", train_accuracy, epoch + 1)
 
+        precision = metrics_calculator.precision.compute().item()
+        recall = metrics_calculator.recall.compute().item()
+        f1_score = metrics_calculator.f1.compute().item()
+        writer.add_scalar("Precision", precision, epoch + 1)
+        writer.add_scalar("Recall", recall, epoch + 1)
+        writer.add_scalar("F1 Score", f1_score, epoch + 1)
+
         # Scheduler step
         if scheduler:
-            scheduler.step()
+            if isinstance(scheduler, optim.lr_scheduler.ReduceLROnPlateau):
+                scheduler.step(train_loss)
+            else:
+                scheduler.step()
             current_lr = optimizer.param_groups[0]["lr"]
             logging.info(f"Learning Rate: {current_lr}")
             writer.add_scalar("Learning Rate", current_lr, epoch + 1)
 
         # Validate
-        val_accuracy = validate(model, val_loader, device)
+        val_accuracy = validate(model, val_loader, device, metrics_calculator)
         logging.info(f"Validation Accuracy: {val_accuracy:.2f}%")
         writer.add_scalar("Validation Accuracy", val_accuracy, epoch + 1)
 
@@ -462,6 +491,7 @@ def main() -> None:  # noqa: PLR0915
             epoch=epoch,
             checkpoint_dir=str(checkpoint_dir),
             scheduler=scheduler,
+            scaler=scaler,
             is_best=is_best,
             best_accuracy=best_accuracy,
         )

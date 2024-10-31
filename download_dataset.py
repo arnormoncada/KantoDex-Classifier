@@ -26,13 +26,14 @@ def download_kaggle_dataset(dataset_name, download_path):
     logging.info("Download completed.")
 
 
-def organize_dataset(raw_path, processed_path):
+def organize_dataset(raw_path, processed_path, skip_folders=None):
     """
     Organize the dataset into processed directories.
 
     Args:
         raw_path (str): Path where raw dataset is downloaded.
         processed_path (str): Path to save processed dataset.
+        skip_folders (list[str], optional): List of folders to skip.
 
     """
     raw_path = Path(raw_path)
@@ -42,6 +43,8 @@ def organize_dataset(raw_path, processed_path):
     for folder in raw_path.iterdir():
         if folder.is_dir():
             label = folder.name
+            if skip_folders and label in skip_folders:
+                continue
             label_dir = processed_path / label
             label_dir.mkdir(parents=True, exist_ok=True)
             for img in folder.glob("*.*"):
@@ -50,7 +53,7 @@ def organize_dataset(raw_path, processed_path):
     logging.info("Dataset organized.")
 
 
-def main(dataset_name=None, raw_path=None, processed_path=None, extra_path=None):
+def main(dataset_name=None, raw_path=None, processed_path=None, extra_path=None, skip_folders=None):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
     # Load environment variables
@@ -65,7 +68,7 @@ def main(dataset_name=None, raw_path=None, processed_path=None, extra_path=None)
 
     raw_dataset_path = raw_path + "/" + extra_path
     # Organize dataset
-    organize_dataset(raw_dataset_path, processed_path)
+    organize_dataset(raw_dataset_path, processed_path, skip_folders)
 
     logging.info("Dataset downloaded and organized.")
 
@@ -100,4 +103,8 @@ if __name__ == "__main__":
             raw_path="data/raw",
             processed_path="data/processed",
             extra_path="dataset",
+            skip_folders=[
+                "Nidorina",
+                "Nidorino",
+            ],  # Skip these folders since nidoran-f and nidoran-m are accidentally in these folders
         )

@@ -67,7 +67,15 @@ class PokemonDataset(Dataset):
         img_path = self.image_paths[idx]
         label = self.labels[idx]
         try:
-            image = Image.open(img_path).convert("RGB")
+            with open(img_path, "rb") as f:
+                image = Image.open(f).convert("RGBA")
+                # Convert to RGB if the image has transparency
+                if image.mode == "RGBA":
+                    background = Image.new("RGB", image.size, (255, 255, 255))
+                    background.paste(image, mask=image.split()[3])  # 3 is the alpha channel
+                    image = background
+                else:
+                    image = image.convert("RGB")
         except Exception:
             logging.exception(f"Error loading image {img_path}")
             # Return a black image in case of error

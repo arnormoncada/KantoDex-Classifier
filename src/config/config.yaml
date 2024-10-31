@@ -1,0 +1,28 @@
+data:
+  processed_path: "data/processed"
+  test_size: 0.2
+  img_size: [224, 224]
+  num_workers: 4
+  batch_size: 32
+
+training:
+  epochs: 25
+  batch_size: 32
+  learning_rate: 0.001
+  optimizer: "adam"
+  scheduler: "step_lr"  # Options: step_lr, cosine, None
+  step_size: 10
+  gamma: 0.1
+  checkpoint_path: "models/checkpoints"
+  resume: False
+  checkpoint_file: ""
+
+model:
+  name: "efficientnet_b3"  # Options: efficientnet_b3, resnet50
+  pretrained: True
+  num_classes: 151
+  dropout: 0.4
+
+augmentation:
+  enable: True
+  # Add additional augmentation parameters if needed

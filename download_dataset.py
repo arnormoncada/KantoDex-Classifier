@@ -2,8 +2,10 @@ import logging
 import os
 import shutil
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
+import yaml
 
 
 def download_kaggle_dataset(dataset_name, download_path):
@@ -48,15 +50,11 @@ def organize_dataset(raw_path, processed_path):
     logging.info("Dataset organized.")
 
 
-def main():
+def main(dataset_name=None, raw_path=None, processed_path=None, extra_path=None):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
     # Load environment variables
     load_dotenv(".env")
-
-    dataset_name = os.getenv("DATASET_NAME", "bhawks/pokemon-generation-one-22k")
-    raw_path = "data/raw"
-    processed_path = "data/processed"
 
     # Create directories if they don't exist
     Path(raw_path).mkdir(parents=True, exist_ok=True)
@@ -65,12 +63,41 @@ def main():
     # Download dataset
     download_kaggle_dataset(dataset_name, raw_path)
 
-    raw_dataset_path = raw_path + "/" + "PokemonData"
+    raw_dataset_path = raw_path + "/" + extra_path
     # Organize dataset
     organize_dataset(raw_dataset_path, processed_path)
 
     logging.info("Dataset downloaded and organized.")
 
 
+def load_config(config_path: str) -> dict[str, Any]:
+    """
+    Load the YAML configuration file.
+
+    Args:
+        config_path (str): Path to the YAML config file.
+
+    Returns:
+        Dict[str, Any]: Configuration parameters.
+
+    """
+    with open(config_path) as f:
+        return yaml.safe_load(f)
+
+
 if __name__ == "__main__":
-    main()
+    config = load_config("src/config/config.yaml")
+    use_both_datasets = config["data"]["use_both_datasets"]
+    if use_both_datasets:
+        main(
+            dataset_name="bhawks/pokemon-generation-one-22k",
+            raw_path="data/raw",
+            processed_path="data/processed",
+            extra_path="PokemonData",
+        )
+        main(
+            dataset_name="thedagger/pokemon-generation-one",
+            raw_path="data/raw",
+            processed_path="data/processed",
+            extra_path="dataset",
+        )

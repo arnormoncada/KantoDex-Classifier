@@ -1,4 +1,5 @@
 data:
+  use_both_datasets: True
   processed_path: "data/processed"
   test_size: 0.2
   img_size: [224, 224]
@@ -26,7 +27,7 @@ training:
   resume: False
 
 model:
-  name: "resnet50" # Options: efficientnet_b3, resnet50
+  name: "custom" # Options: efficientnet_b3, resnet50, custom
   pretrained: True
   num_classes: 151
   dropout: 0.2
@@ -35,7 +36,7 @@ augmentation:
   enable: True
   rand_augment: True
   horizontal_flip: True
-  vertical_flip: False
+  vertical_flip: True
   brightness_contrast: True
   rotation: True
   shift_scale_rotate: True
@@ -44,6 +45,6 @@ augmentation:
   elastic_transform: False
   cutout: True
   random_erasing: True
-  use_cutmix: True
-  use_mixup: True
+  use_cutmix: False
+  use_mixup: False
   alpha: 1.0

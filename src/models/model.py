@@ -1,6 +1,8 @@
 from torch import Tensor, nn
 from torchvision import models
 
+from src.models.custom_model import KantoDexClassifierCustom
+
 
 class KantoDexClassifier(nn.Module):
     """
@@ -48,12 +50,23 @@ class KantoDexClassifier(nn.Module):
                 nn.Dropout(p=drop_prob),
                 nn.Linear(in_features, num_classes),
             )
+        elif model_name == "custom":
+            self.backbone = KantoDexClassifierCustom(
+                num_classes=num_classes,
+                drop_prob=drop_prob,
+                attention_embed_dim=512,  # Must match the custom model's attention_embed_dim
+                attention_num_heads=8,
+                dropblock_block_size=7,
+                max_len=10000,
+            )
         else:
-            error_msg = f"Unsupported model_name: {model_name}"
-            raise ValueError(error_msg)
-
+            msg = f"Invalid model name: {model_name}"
+            raise ValueError(msg)
         # Optional: Initialize weights for the new classifier
-        self._initialize_weights()
+        if model_name != "custom":
+            self._initialize_weights_for_custom()
+        else:
+            self._initialize_weights()
 
     def forward(self, x: Tensor) -> Tensor:
         """
@@ -75,3 +88,24 @@ class KantoDexClassifier(nn.Module):
                 nn.init.xavier_uniform_(m.weight)
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
+
+    def _initialize_weights_for_custom(self):
+        """Initialize weights of the custom model layers if needed."""
+        for m in self.backbone.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight)
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.BatchNorm2d | nn.LayerNorm):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.MultiheadAttention):
+                nn.init.xavier_uniform_(m.in_proj_weight)
+                nn.init.xavier_uniform_(m.out_proj.weight)
+                if m.in_proj_bias is not None:
+                    nn.init.constant_(m.in_proj_bias, 0)
+                    nn.init.constant_(m.out_proj.bias, 0)

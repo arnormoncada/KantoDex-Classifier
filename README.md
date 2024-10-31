@@ -29,9 +29,14 @@ KantoDex-Classifier/
     │   ├── __init__.py
     │   ├── custom_model.py
     │   └── model.py
-    └── utils/
+    ├── utils/
+    │   ├── __init__.py
+    │   ├── helpers.py
+    │   └── metrics.py
+    └── visualization/
         ├── __init__.py
-        └── helpers.py
+        └── visualize_model.py
+        
 ```
 
 ## 🛠️ Included Components
@@ -46,6 +51,9 @@ KantoDex-Classifier/
      - `augmentor.py`: Implements data augmentation techniques to enhance model robustness.
    - **Utilities (`src/utils/`):**
      - `helpers.py`: Provides helper functions for checkpointing and directory management.
+    - `metrics.py`: Defines custom metrics like accuracy and F1 score for model evaluation.
+    - **Visualization (`src/visualization/`):**
+      - `visualize_model.py`: Contains functions to visualize the model architecture.
    - **Configuration (`src/config/`):**
      - `config.yaml`: YAML configuration file outlining parameters for data processing, training, augmentation, and model settings.
 

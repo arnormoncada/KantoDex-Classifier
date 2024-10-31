@@ -58,8 +58,6 @@ class KantoDexClassifier(nn.Module):
                 drop_prob=custom_config.get("drop_prob", drop_prob),
                 attention_embed_dim=custom_config.get("attention_embed_dim", 512),
                 attention_num_heads=custom_config.get("attention_num_heads", 8),
-                transformer_layers=custom_config.get("transformer_layers", 4),
-                ff_hidden_dim=custom_config.get("ff_hidden_dim", 2048),
                 dropblock_block_size=custom_config.get("dropblock_block_size", 7),
                 max_len=custom_config.get("max_len", 10000),
             )

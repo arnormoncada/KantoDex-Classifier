@@ -35,8 +35,6 @@ model:
       drop_prob: 0.2
       attention_embed_dim: 512
       attention_num_heads: 8
-      transformer_layers: 4
-      ff_hidden_dim: 2048
       dropblock_block_size: 7
       max_len: 10000
 

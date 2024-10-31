@@ -1,19 +1,28 @@
+import math
+
 import torch
 import torch.nn.functional as F
 from torch import nn
 
 
-class LearnablePositionalEncoding(nn.Module):
-    """Learnable Positional Encoding module adds positional information to the input embeddings."""
+class PositionalEncoding(nn.Module):
+    """Positional Encoding module adds positional information to the input embeddings."""
 
-    def __init__(self, embed_dim: int, max_len: int = 10000) -> None:
+    def __init__(self, embed_dim: int, max_len: int = 5000) -> None:
         super().__init__()
-        self.pos_embedding = nn.Embedding(max_len, embed_dim)
-        self.max_len = max_len
+        pe = torch.zeros(max_len, embed_dim)  # Shape: (max_len, embed_dim)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)  # Shape: (max_len, 1)
+        div_term = torch.exp(
+            torch.arange(0, embed_dim, 2).float() * (-math.log(10000.0) / embed_dim),
+        )
+        pe[:, 0::2] = torch.sin(position * div_term)  # Even indices
+        pe[:, 1::2] = torch.cos(position * div_term)  # Odd indices
+        pe = pe.unsqueeze(0)  # Shape: (1, max_len, embed_dim)
+        self.register_buffer("pe", pe)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Add learnable positional encoding to the input tensor.
+        Add positional encoding to the input tensor.
 
         Args:
             x (torch.Tensor): Input tensor of shape (batch, seq_length, embed_dim)
@@ -22,14 +31,7 @@ class LearnablePositionalEncoding(nn.Module):
             torch.Tensor: Tensor with positional encoding added.
 
         """
-        batch_size, seq_length, embed_dim = x.size()
-        position_ids = (
-            torch.arange(seq_length, dtype=torch.long, device=x.device)
-            .unsqueeze(0)
-            .expand(batch_size, seq_length)
-        )
-        pos_emb = self.pos_embedding(position_ids)
-        x = x + pos_emb
+        x = x + self.pe[:, : x.size(1), :]
         return x  # noqa: RET504
 
 
@@ -111,43 +113,20 @@ class MultiHeadSelfAttention(nn.Module):
 
     def __init__(self, embed_dim: int, num_heads: int, dropout: float = 0.1) -> None:
         super().__init__()
-        self.attention = nn.MultiheadAttention(
-            embed_dim,
-            num_heads,
-            dropout=dropout,
-            batch_first=True,
-        )
+        self.attention = nn.MultiheadAttention(embed_dim, num_heads, dropout=dropout)
         self.norm = nn.LayerNorm(embed_dim)
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:  # noqa: D102
         # x shape: (batch, seq_length, embed_dim)
-        attn_output, _ = self.attention(x, x, x)
+        x_permuted = x.permute(
+            1,
+            0,
+            2,
+        )  # Convert to (seq_length, batch, embed_dim) for nn.MultiheadAttention
+        attn_output, _ = self.attention(x_permuted, x_permuted, x_permuted)
+        attn_output = attn_output.permute(1, 0, 2)  # Back to (batch, seq_length, embed_dim)
         x = self.norm(x + self.dropout(attn_output))
-        return x  # noqa: RET504
-
-
-class TransformerEncoderLayer(nn.Module):
-    """Transformer Encoder Layer with MHSA and Feed-Forward Network."""
-
-    def __init__(
-        self, embed_dim: int, num_heads: int, ff_hidden_dim: int, dropout: float = 0.1
-    ) -> None:
-        super().__init__()
-        self.mhsa = MultiHeadSelfAttention(embed_dim, num_heads, dropout)
-        self.ffn = nn.Sequential(
-            nn.Linear(embed_dim, ff_hidden_dim),
-            nn.ReLU(inplace=True),
-            nn.Dropout(dropout),
-            nn.Linear(ff_hidden_dim, embed_dim),
-            nn.Dropout(dropout),
-        )
-        self.norm = nn.LayerNorm(embed_dim)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:  # noqa: D102
-        x = self.mhsa(x)
-        ffn_output = self.ffn(x)
-        x = self.norm(x + ffn_output)
         return x  # noqa: RET504
 
 
@@ -176,6 +155,7 @@ class DropBlock2D(nn.Module):
         # Sample mask
         # Shape: (batch_size, channels, height, width)  # noqa: ERA001
         mask = torch.bernoulli(torch.ones_like(x) * gamma)
+
         # Apply max pooling to create contiguous blocks
         mask = F.max_pool2d(
             mask,
@@ -183,6 +163,7 @@ class DropBlock2D(nn.Module):
             stride=1,
             padding=self.block_size // 2,
         )
+
         # Invert mask: 1 means keep, 0 means drop
         mask = 1 - mask
 
@@ -206,8 +187,8 @@ class KantoDexClassifierCustom(nn.Module):
     """
     KantoDexClassifierCustom is a custom neural network model for classifying Generation I Pokémon.
 
-    It uses a custom architecture with a convolutional backbone, attention mechanism, SE blocks,
-    transformers, multi-head self-attention, positional encoding, and DropBlock regularization.
+    It combines convolutional layers with residual connections, SE blocks,
+    multi-head self-attention, positional encoding, and DropBlock regularization.
     """
 
     def __init__(  # noqa: PLR0913
@@ -216,8 +197,6 @@ class KantoDexClassifierCustom(nn.Module):
         drop_prob: float = 0.4,
         attention_embed_dim: int = 512,  # Set to 512 to match convolutional output
         attention_num_heads: int = 8,
-        transformer_layers: int = 4,
-        ff_hidden_dim: int = 2048,
         dropblock_block_size: int = 7,
         max_len: int = 10000,
     ) -> None:
@@ -229,8 +208,6 @@ class KantoDexClassifierCustom(nn.Module):
             drop_prob (float): Dropout rate for regularization.
             attention_embed_dim (int): Embedding dimension for attention.
             attention_num_heads (int): Number of attention heads.
-            transformer_layers (int): Number of transformer encoder layers.
-            ff_hidden_dim (int): Hidden dimension size for feed-forward networks in transformer.
             dropblock_block_size (int): Block size for DropBlock.
             max_len (int): Maximum sequence length for Positional Encoding.
 
@@ -241,72 +218,48 @@ class KantoDexClassifierCustom(nn.Module):
         self.stem = nn.Sequential(
             nn.Conv2d(
                 3,
-                128,
+                64,
                 kernel_size=7,
                 stride=2,
                 padding=3,
                 bias=False,
-            ),  # Output: (128, H/2, W/2)
-            nn.BatchNorm2d(128),
+            ),  # Output: (64, H/2, W/2)
+            nn.BatchNorm2d(64),
             nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=3, stride=2, padding=1),  # Output: (128, H/4, W/4)
+            nn.MaxPool2d(kernel_size=3, stride=2, padding=1),  # Output: (64, H/4, W/4)
         )
 
         # Convolutional Blocks
-        self.layer1 = self._make_layer(128, 256, num_blocks=3, stride=1)  # Increased channels
-        self.layer2 = self._make_layer(256, 512, num_blocks=4, stride=2)
-        self.layer3 = self._make_layer(
-            512,
-            1024,
-            num_blocks=6,
-            stride=2,
-        )  # Further increased channels
+        self.layer1 = self._make_layer(64, 128, num_blocks=2, stride=1)
+        self.layer2 = self._make_layer(128, 256, num_blocks=2, stride=2)
+        self.layer3 = self._make_layer(256, 512, num_blocks=2, stride=2)
 
         # DropBlock after convolutional layers
         self.dropblock = DropBlock2D(block_size=dropblock_block_size, drop_prob=drop_prob)
 
-        # Classification Token
-        self.cls_token = nn.Parameter(torch.zeros(1, 1, attention_embed_dim))
-
-        # Projection to match attention_embed_dim
-        self.projection = nn.Conv2d(
-            1024,
-            attention_embed_dim,
-            kernel_size=1,
-        )  # Changed to Conv2d for spatial projection
+        # Projection to match attention_embed_dim (already 512, so can skip if not reducing)
+        # If attention_embed_dim != 512 and you want to project, apply projection
+        if attention_embed_dim != 512:  # noqa: PLR2004
+            self.projection = nn.Linear(512, attention_embed_dim)
+        else:
+            self.projection = None
 
         # Positional Encoding
-        self.positional_encoding = LearnablePositionalEncoding(
+        self.positional_encoding = PositionalEncoding(
             embed_dim=attention_embed_dim,
             max_len=max_len,
         )
 
-        # Transformer Encoder
-        self.transformer_encoder_layers = nn.ModuleList(
-            [
-                TransformerEncoderLayer(
-                    embed_dim=attention_embed_dim,
-                    num_heads=attention_num_heads,
-                    ff_hidden_dim=ff_hidden_dim,
-                    dropout=drop_prob,
-                )
-                for _ in range(transformer_layers)
-            ],
+        # Attention
+        self.attention = MultiHeadSelfAttention(
+            embed_dim=attention_embed_dim,
+            num_heads=attention_num_heads,
         )
 
-        # Dropout
+        # Adaptive Pooling and Classifier
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         self.dropout = nn.Dropout(p=drop_prob)
-
-        # Classifier
-        self.classifier = nn.Sequential(
-            nn.Linear(attention_embed_dim, ff_hidden_dim),
-            nn.ReLU(inplace=True),
-            nn.Dropout(drop_prob),
-            nn.Linear(ff_hidden_dim, num_classes),
-        )
-
-        # Initialize CLS token
-        nn.init.trunc_normal_(self.cls_token, std=0.02)
+        self.classifier = nn.Linear(attention_embed_dim, num_classes)
 
     def _make_layer(
         self,
@@ -345,43 +298,38 @@ class KantoDexClassifierCustom(nn.Module):
             torch.Tensor: Output predictions of shape (batch_size, num_classes)
 
         """
-        batch = x.size(0)
-        x = self.stem(x)  # Shape: (batch, 128, H/4, W/4)
-        x = self.layer1(x)  # Shape: (batch, 256, H/4, W/4)
-        x = self.layer2(x)  # Shape: (batch, 512, H/8, W/8)
-        x = self.layer3(x)  # Shape: (batch, 1024, H/16, W/16)
+        x = self.stem(x)  # Shape: (batch, 64, H/4, W/4)
+        x = self.layer1(x)  # Shape: (batch, 128, H/4, W/4)
+        x = self.layer2(x)  # Shape: (batch, 256, H/8, W/8)
+        x = self.layer3(x)  # Shape: (batch, 512, H/16, W/16)
 
         # Apply DropBlock after convolutional layers
-        x = self.dropblock(x)  # Shape: (batch, 1024, H/16, W/16)
+        x = self.dropblock(x)  # Shape: (batch, 512, H/16, W/16)
 
-        # Projection to attention_embed_dim
-        x = self.projection(x)  # Shape: (batch, attention_embed_dim, H/16, W/16)
-
-        # Flatten spatial dimensions
-        batch, embed_dim, height, width = x.size()
-        seq_length = height * width
-        x = x.view(batch, embed_dim, seq_length).permute(
+        # Prepare for Attention: Flatten spatial dimensions
+        batch, channels, height, width = x.size()
+        x = x.view(batch, channels, height * width).permute(
             0,
             2,
             1,
-        )  # Shape: (batch, seq_length, embed_dim)
+        )  # Shape: (batch, seq_length, channels)
 
-        # Concatenate CLS token
-        cls_tokens = self.cls_token.expand(batch, -1, -1)  # Shape: (batch, 1, embed_dim)
-        x = torch.cat((cls_tokens, x), dim=1)  # Shape: (batch, seq_length + 1, embed_dim)
+        # Optional Projection
+        if self.projection is not None:
+            x = self.projection(x)  # Shape: (batch, seq_length, attention_embed_dim)
 
         # Positional Encoding
-        x = self.positional_encoding(x)  # Shape: (batch, seq_length + 1, embed_dim)
+        x = self.positional_encoding(x)  # Shape: (batch, seq_length, embed_dim)
 
-        # Transformer Encoder
-        for layer in self.transformer_encoder_layers:
-            x = layer(x)  # Shape: (batch, seq_length + 1, embed_dim)
+        # Attention
+        x = self.attention(x)  # Shape: (batch, seq_length, embed_dim)
 
-        # Extract CLS token for classification
-        cls_output = x[:, 0, :]  # Shape: (batch, embed_dim)
+        # Global Average Pooling over sequence length
+        x = x.mean(dim=1)  # Shape: (batch, embed_dim)
 
         # Final Classification Layers
-        x = self.dropout(cls_output)
+        x = self.avgpool(x.view(batch, -1, 1, 1)).view(batch, -1)  # Shape: (batch, embed_dim)
+        x = self.dropout(x)
         x = self.classifier(x)  # Shape: (batch, num_classes)
 
         return x  # noqa: RET504

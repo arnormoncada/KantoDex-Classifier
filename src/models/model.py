@@ -19,6 +19,7 @@ class KantoDexClassifier(nn.Module):
         num_classes: int = 151,
         pretrained: bool = True,
         drop_prob: float = 0.4,
+        custom_config: dict | None = None,
     ) -> None:
         """
         Initialize the KantoDexClassifier with the specified backbone model.
@@ -28,6 +29,7 @@ class KantoDexClassifier(nn.Module):
             num_classes (int): Number of output classes.
             pretrained (bool): Whether to use pretrained weights.
             drop_prob (float): Dropout rate for regularization.
+            custom_config (dict): Configuration for the custom model.
 
         """
         super().__init__()
@@ -53,11 +55,13 @@ class KantoDexClassifier(nn.Module):
         elif model_name == "custom":
             self.backbone = KantoDexClassifierCustom(
                 num_classes=num_classes,
-                drop_prob=drop_prob,
-                attention_embed_dim=512,  # Must match the custom model's attention_embed_dim
-                attention_num_heads=8,
-                dropblock_block_size=7,
-                max_len=10000,
+                drop_prob=custom_config.get("drop_prob", drop_prob),
+                attention_embed_dim=custom_config.get("attention_embed_dim", 512),
+                attention_num_heads=custom_config.get("attention_num_heads", 8),
+                transformer_layers=custom_config.get("transformer_layers", 4),
+                ff_hidden_dim=custom_config.get("ff_hidden_dim", 2048),
+                dropblock_block_size=custom_config.get("dropblock_block_size", 7),
+                max_len=custom_config.get("max_len", 10000),
             )
         else:
             msg = f"Invalid model name: {model_name}"

@@ -102,6 +102,7 @@ def initialize_model(config: dict[str, Any], num_classes: int, device: torch.dev
         num_classes=num_classes,
         pretrained=config["model"].get("pretrained", True),
         drop_prob=config["model"].get("dropout", 0.1),
+        custom_config=config["model"].get("custom_model_params", None),
     ).to(device)
     logging.info(
         "Initialized model: {}".format(

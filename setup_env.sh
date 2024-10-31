@@ -5,7 +5,17 @@ set -e
 
 # Load Conda into the current shell session
 echo "Loading Conda..."
-source "$(conda info --base)/etc/profile.d/conda.sh"
+if [[ "$OSTYPE" == "msys" ]]; then
+    # Windows
+    source "$(conda info --base)/shell/condabin/conda-hook.ps1"
+else
+    # Fallback when conda.sh is not found
+    if [[ ! -f "$(conda info --base)/etc/profile.d/conda.sh" ]]; then
+        echo "Conda initialization script not found."
+    else
+        source "$(conda info --base)/etc/profile.d/conda.sh"
+    fi
+fi
 
 ENV_NAME="kantodex-classifier"
 

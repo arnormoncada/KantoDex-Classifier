@@ -107,7 +107,7 @@ def collate_fn(
     """
     images, labels = zip(*batch, strict=False)
     # Resize images to the same size
-    # images = [transforms.functional.resize(img, (224, 224)) for img in images]
+    images = [transforms.functional.resize(img, (224, 224)) for img in images]
     images = torch.stack(images)
     labels = torch.tensor(labels)
 

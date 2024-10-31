@@ -47,8 +47,8 @@ class MetricsCalculator:
 
         """
         return {
-            "accuracy": self.accuracy.compute().item(),
-            "precision": self.precision.compute().item(),
-            "recall": self.recall.compute().item(),
-            "f1_score": self.f1.compute().item(),
+            "accuracy": self.accuracy.compute().item() * 100,
+            "precision": self.precision.compute().item() * 100,
+            "recall": self.recall.compute().item() * 100,
+            "f1_score": self.f1.compute().item() * 100,
         }

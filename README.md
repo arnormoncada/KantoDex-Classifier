@@ -39,3 +39,9 @@ python download_dataset.py
 ```bash
 python train.py
 ```
+
+#### 4.1 Resume training
+
+```bash
+python train.py --resume
+```

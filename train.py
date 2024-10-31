@@ -6,10 +6,13 @@ from typing import Any
 import torch
 import yaml
 from torch import nn, optim
+from torch.amp import GradScaler, autocast
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
+from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
-from src.data.data_loader import DataLoader, load_data
+from src.data.data_loader import collate_fn, load_data
 from src.models.model import KantoDexClassifier
 from src.utils.helpers import save_checkpoint
 
@@ -91,9 +94,13 @@ def initialize_model(config: dict[str, Any], num_classes: int, device: torch.dev
         model_name=config["model"].get("name", "efficientnet_b3"),
         num_classes=num_classes,
         pretrained=config["model"].get("pretrained", True),
-        dropout=config["model"].get("dropout", 0.4),
+        drop_prob=config["model"].get("dropout", 0.1),
     ).to(device)
-    logging.info("Initialized model: {}".format(config["model"].get("name", "efficientnet_b3")))
+    logging.info(
+        "Initialized model: {}".format(
+            config["model"].get("name", "efficientnet_b3"),
+        ),
+    )
     return model
 
 
@@ -109,23 +116,50 @@ def initialize_optimizer(config: dict[str, Any], model: nn.Module) -> optim.Opti
         optim.Optimizer: Initialized optimizer.
 
     """
-    optimizer_name = config["training"].get("optimizer", "adam").lower()
-    lr = config["training"]["learning_rate"]
-    if optimizer_name == "adam":
-        optimizer = optim.Adam(model.parameters(), lr=lr)
+    optimizer_name = config["training"].get("optimizer", "adamw").lower()
+    if optimizer_name == "adamw":
+        optimizer = optim.AdamW(
+            model.parameters(),
+            lr=config["training"]["optimizer_params"].get("learning_rate", 1e-4),
+            weight_decay=config["training"]["optimizer_params"].get("weight_decay", 0.01),
+            eps=config["training"]["optimizer_params"].get("eps", 1e-8),
+        )
+        logging.info("Initialized AdamW optimizer.")
+    elif optimizer_name == "adam":
+        optimizer = optim.Adam(
+            model.parameters(),
+            lr=config["training"]["optimizer_params"].get("learning_rate", 1e-4),
+            weight_decay=config["training"]["optimizer_params"].get("weight_decay", 0.01),
+            eps=config["training"]["optimizer_params"].get("eps", 1e-8),
+        )
+        logging.info("Initialized Adam optimizer.")
     elif optimizer_name == "sgd":
-        optimizer = optim.SGD(model.parameters(), lr=lr, momentum=0.9)
+        optimizer = optim.SGD(
+            model.parameters(),
+            lr=config["training"]["optimizer_params"].get("learning_rate", 0.01),
+            momentum=config["training"]["optimizer_params"].get("momentum", 0.9),
+            weight_decay=config["training"]["optimizer_params"].get("weight_decay", 0.01),
+        )
+        logging.info("Initialized SGD optimizer.")
+    elif optimizer_name == "rmsprop":
+        optimizer = optim.RMSprop(
+            model.parameters(),
+            lr=config["training"]["optimizer_params"].get("learning_rate", 0.01),
+            alpha=config["training"]["optimizer_params"].get("alpha", 0.99),
+            eps=config["training"]["optimizer_params"].get("eps", 1e-8),
+            weight_decay=config["training"]["optimizer_params"].get("weight_decay", 0.01),
+            momentum=config["training"]["optimizer_params"].get("momentum", 0.9),
+        )
+        logging.info("Initialized RMSprop optimizer.")
     else:
-        error_msg = f"Unsupported optimizer: {optimizer_name}"
-        raise ValueError(error_msg)
-    logging.info(f"Initialized optimizer: {optimizer_name} with learning rate {lr}")
+        msg = f"Unknown optimizer: {optimizer_name}"
+        raise ValueError(msg)
     return optimizer
 
 
 def initialize_scheduler(
     config: dict[str, Any],
     optimizer: optim.Optimizer,
-    num_epochs: int,
 ) -> optim.lr_scheduler._LRScheduler | None:
     """
     Initialize the learning rate scheduler based on the configuration.
@@ -133,7 +167,6 @@ def initialize_scheduler(
     Args:
         config (Dict[str, Any]): Configuration parameters.
         optimizer (optim.Optimizer): The optimizer.
-        num_epochs (int): Total number of training epochs.
 
     Returns:
         Optional[optim.lr_scheduler._LRScheduler]: Initialized scheduler or None.
@@ -141,16 +174,49 @@ def initialize_scheduler(
     """
     scheduler = None
     scheduler_name = config["training"].get("scheduler", None)
+
     if scheduler_name == "step_lr":
         scheduler = optim.lr_scheduler.StepLR(
             optimizer,
-            step_size=config["training"]["step_size"],
-            gamma=config["training"]["gamma"],
+            step_size=config["training"].get("scheduler_params", {}).get("step_size", 30),
+            gamma=config["training"].get("scheduler_params", {}).get("gamma", 0.1),
         )
         logging.info("Initialized StepLR scheduler.")
-    elif scheduler_name == "cosine":
-        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs)
+    if scheduler_name == "cosine":
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=config["training"].get("scheduler_params", {}).get("T_max", 10),
+            eta_min=config["training"].get("scheduler_params", {}).get("eta_min", 1e-6),
+        )
         logging.info("Initialized CosineAnnealingLR scheduler.")
+    if scheduler_name == "cosine_annealing_warm_restarts":
+        scheduler = CosineAnnealingWarmRestarts(
+            optimizer,
+            T_0=config["training"].get("scheduler_params", {}).get("T_0", 10),
+            T_mult=config["training"].get("scheduler_params", {}).get("T_mult", 2),
+            eta_min=config["training"].get("scheduler_params", {}).get("eta_min", 1e-6),
+        )
+        logging.info("Initialized CosineAnnealingWarmRestarts scheduler.")
+    if scheduler_name == "reduce_lr_on_plateau":
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode=config["training"].get("scheduler_params", {}).get("mode", "min"),
+            factor=config["training"].get("scheduler_params", {}).get("factor", 0.1),
+            patience=config["training"].get("scheduler_params", {}).get("patience", 10),
+            threshold=config["training"].get("scheduler_params", {}).get("threshold", 1e-4),
+            threshold_mode=config["training"]
+            .get("scheduler_params", {})
+            .get("threshold_mode", "rel"),
+            cooldown=config["training"].get("scheduler_params", {}).get("cooldown", 0),
+            min_lr=config["training"].get("scheduler_params", {}).get("min_lr", 0),
+            eps=config["training"].get("scheduler_params", {}).get("eps", 1e-8),
+            verbose=config["training"].get("scheduler_params", {}).get("verbose", False),
+        )
+        logging.info("Initialized ReduceLROnPlateau scheduler.")
+    if scheduler:
+        logging.info(f"Initialized scheduler: {scheduler_name}")
+    else:
+        logging.info("No scheduler initialized.")
     return scheduler
 
 
@@ -195,15 +261,19 @@ def resume_training(
     return 0, 0.0
 
 
-def train_epoch(
+def train_epoch(  # noqa:  PLR0913
     model: nn.Module,
     dataloader: DataLoader,
     criterion: nn.Module,
     optimizer: optim.Optimizer,
     device: torch.device,
-) -> float:
+    scaler: GradScaler,
+    use_cutmix: bool = False,
+    use_mixup: bool = False,
+    alpha: float = 1.0,
+) -> tuple[float, float]:
     """
-    Train the model for one epoch.
+    Train the model for one epoch with optional CutMix and MixUp augmentations.
 
     Args:
         model (nn.Module): The model.
@@ -211,28 +281,52 @@ def train_epoch(
         criterion (nn.Module): Loss function.
         optimizer (optim.Optimizer): Optimizer.
         device (torch.device): Device to train on.
+        scaler (GradScaler): Gradient scaler for mixed precision.
+        use_cutmix (bool, optional): Flag to use CutMix augmentation.
+        use_mixup (bool, optional): Flag to use MixUp augmentation.
+        alpha (float, optional): Alpha parameter for CutMix and MixUp.
 
     Returns:
-        float: Average loss for the epoch.
+        Tuple[float, float]: (Average loss, Average accuracy) for the epoch.
 
     """
     model.train()
     running_loss = 0.0
+    correct = 0
+    total = 0
+
     for batch in tqdm(dataloader, desc="Training", unit="batch"):
         images, labels = batch
+
+        if use_cutmix or use_mixup:
+            images, labels = collate_fn(images, labels, use_cutmix, use_mixup, alpha)
+
         images = images.to(device)
         labels = labels.to(device)
 
-        outputs = model(images)
-        loss = criterion(outputs, labels)
+        # **Convert labels to Long dtype**
+        labels = labels.long()
 
         optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+
+        with autocast(device.type, enabled=device.type == "cuda"):
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
 
         running_loss += loss.item()
+
+        # **Calculate Accuracy**
+        _, predicted = torch.max(outputs.data, 1)
+        total += labels.size(0)
+        correct += (predicted == labels).sum().item()
+
     avg_loss = running_loss / len(dataloader)
-    return avg_loss  # noqa: RET504
+    accuracy = 100 * correct / total
+    return avg_loss, accuracy  # Return both loss and accuracy
 
 
 def validate(
@@ -268,12 +362,11 @@ def validate(
     return accuracy  # noqa: RET504
 
 
-def main() -> None:
+def main() -> None:  # noqa: PLR0915
     """Orchestrate the training process."""
     args = parse_args()
     setup_logging()
     config = load_config(args.config)
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logging.info(f"Using device: {device}")
 
@@ -284,21 +377,31 @@ def main() -> None:
         batch_size=config["training"]["batch_size"],
         img_size=tuple(config["data"]["img_size"]),
         num_workers=config["data"]["num_workers"],
+        use_cutmix=config["augmentation"].get("use_cutmix", False),
+        use_mixup=config["augmentation"].get("use_mixup", False),
+        alpha=config["augmentation"].get("alpha", 1.0),
     )
-
     num_classes = len(label_to_idx)
     logging.info(f"Number of classes: {num_classes}")
 
     # Initialize model, optimizer, scheduler
     model = initialize_model(config, num_classes, device)
     optimizer = initialize_optimizer(config, model)
-    scheduler = initialize_scheduler(config, optimizer, config["training"]["epochs"])
+    scheduler = initialize_scheduler(config, optimizer)
 
-    # Loss function
-    criterion = nn.CrossEntropyLoss()
+    # Loss function with Label Smoothing
+    label_smoothing = config["training"].get("label_smoothing", 0.1)
+    criterion = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
 
-    # TensorBoard
+    # TensorBoard writer
     writer = SummaryWriter(log_dir="runs")
+
+    # Mixed Precision
+    scaler = GradScaler("cuda", enabled=device.type == "cuda")
+
+    # Early Stopping parameters
+    early_stopping_patience = config["training"].get("early_stopping_patience", 10)
+    epochs_no_improve = 0
 
     # Resume training if flag is set
     start_epoch, best_accuracy = 0, 0.0
@@ -308,11 +411,25 @@ def main() -> None:
     num_epochs = config["training"]["epochs"]
     for epoch in range(start_epoch, num_epochs):
         logging.info(f"Starting epoch {epoch + 1}/{num_epochs}")
+        writer.add_scalar("Epoch", epoch + 1, epoch + 1)
 
         # Train
-        train_loss = train_epoch(model, train_loader, criterion, optimizer, device)
-        logging.info(f"Epoch [{epoch + 1}/{num_epochs}], Loss: {train_loss:.4f}")
+        train_loss, train_accuracy = train_epoch(
+            model,
+            train_loader,
+            criterion,
+            optimizer,
+            device,
+            scaler,
+            use_cutmix=config["training"].get("use_cutmix", False),
+            use_mixup=config["training"].get("use_mixup", False),
+            alpha=config["training"].get("alpha", 1.0),
+        )
+        logging.info(
+            f"Epoch [{epoch + 1}/{num_epochs}], Loss: {train_loss:.4f}, Accuracy: {train_accuracy:.2f}%",  # noqa: E501
+        )
         writer.add_scalar("Training Loss", train_loss, epoch + 1)
+        writer.add_scalar("Training Accuracy", train_accuracy, epoch + 1)
 
         # Scheduler step
         if scheduler:
@@ -330,7 +447,11 @@ def main() -> None:
         is_best = val_accuracy > best_accuracy
         if is_best:
             best_accuracy = val_accuracy
+            epochs_no_improve = 0
             logging.info(f"New best accuracy: {best_accuracy:.2f}%")
+        else:
+            epochs_no_improve += 1
+            logging.info(f"No improvement in validation accuracy for {epochs_no_improve} epochs.")
 
         # Save checkpoint
         checkpoint_dir = Path(config["training"]["checkpoint_path"])
@@ -345,6 +466,11 @@ def main() -> None:
             best_accuracy=best_accuracy,
         )
         writer.add_scalar("Best Accuracy", best_accuracy, epoch + 1)
+
+        # Early Stopping
+        if epochs_no_improve >= early_stopping_patience:
+            logging.info("Early stopping triggered.")
+            break
 
     logging.info("Training complete.")
     writer.close()

@@ -3,26 +3,47 @@ data:
   test_size: 0.2
   img_size: [224, 224]
   num_workers: 4
-  batch_size: 32
+  batch_size: 16
 
 training:
   epochs: 25
-  batch_size: 32
-  learning_rate: 0.001
-  optimizer: "adam"
-  scheduler: "step_lr"  # Options: step_lr, cosine, None
-  step_size: 10
-  gamma: 0.1
+  batch_size: 16
+  optimizer: "adamw" # Options: adamw, adam, sgd, rmsprop
+  optimizer_params:
+    learning_rate: 0.001
+    weight_decay: 0.01
+    momentum: 0.9
+  scheduler: "cosine_annealing_warm_restarts"  # Options: step_lr, cosine, cosine_annealing_warm_restarts, reduce_lr_on_plateau, None
+  scheduler_params:
+    T_0: 10
+    T_mult: 2
+    eta_min: 0.00001
+    gamma: 0.1
+    step_size: 10
+    early_stopping_patience: 15  
+  label_smoothing: 0.1  #
   checkpoint_path: "models/checkpoints"
   resume: False
-  checkpoint_file: ""
 
 model:
-  name: "efficientnet_b3"  # Options: efficientnet_b3, resnet50
+  name: "resnet50" # Options: efficientnet_b3, resnet50
   pretrained: True
   num_classes: 151
-  dropout: 0.4
+  dropout: 0.2
 
 augmentation:
   enable: True
-  # Add additional augmentation parameters if needed
+  rand_augment: True
+  horizontal_flip: True
+  vertical_flip: False
+  brightness_contrast: True
+  rotation: True
+  shift_scale_rotate: True
+  gauss_noise: True
+  blur: False
+  elastic_transform: False
+  cutout: True
+  random_erasing: True
+  use_cutmix: True
+  use_mixup: True
+  alpha: 1.0

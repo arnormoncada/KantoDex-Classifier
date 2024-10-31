@@ -54,7 +54,7 @@ def main():
     # Load environment variables
     load_dotenv(".env")
 
-    dataset_name = os.getenv("DATASET_NAME", "thedagger/pokemon-generation-one")
+    dataset_name = os.getenv("DATASET_NAME", "bhawks/pokemon-generation-one-22k")
     raw_path = "data/raw"
     processed_path = "data/processed"
 
@@ -65,7 +65,7 @@ def main():
     # Download dataset
     download_kaggle_dataset(dataset_name, raw_path)
 
-    raw_dataset_path = raw_path + "/" + "dataset"
+    raw_dataset_path = raw_path + "/" + "PokemonData"
     # Organize dataset
     organize_dataset(raw_dataset_path, processed_path)
 

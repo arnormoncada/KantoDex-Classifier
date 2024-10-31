@@ -4,7 +4,7 @@ channels:
   - defaults
 dependencies:
   - python=3.11
-  - kagglehub
+  - pip
   - numpy
   - pandas
   - scikit-learn
@@ -12,16 +12,17 @@ dependencies:
   - torchvision
   - cudatoolkit
   - albumentations
+  - opencv
+  - timm
   - matplotlib
   - seaborn
   - pyyaml
   - ruff
   - tqdm
   - python-dotenv
-  - pip
+  - torchmetrics
   - pip:
-      - kaggle
-      - tensorboard
-      - torch-tb-profiler
-      - tensorboard-plugin-profile
-
+    - kaggle
+    - tensorboard
+    - torch-tb-profiler
+    - tensorboard-plugin-profile

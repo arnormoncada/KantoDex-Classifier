@@ -2,6 +2,7 @@ from torch import Tensor, nn
 from torchvision import models
 
 from src.models.custom_model import KantoDexClassifierCustom
+from src.models.vit import VisionTransformer
 
 
 class KantoDexClassifier(nn.Module):
@@ -60,6 +61,18 @@ class KantoDexClassifier(nn.Module):
                 attention_num_heads=custom_config.get("attention_num_heads", 8),
                 dropblock_block_size=custom_config.get("dropblock_block_size", 7),
                 max_len=custom_config.get("max_len", 10000),
+            )
+        elif model_name == "vit":
+            self.backbone = VisionTransformer(
+                img_size=224,
+                patch_size=16,
+                in_channels=3,
+                num_classes=151,
+                embed_dim=768,
+                depth=12,
+                num_heads=12,
+                mlp_ratio=4.0,
+                dropout=0.1,
             )
         else:
             msg = f"Invalid model name: {model_name}"

@@ -27,7 +27,7 @@ training:
   resume: False
 
 model:
-  name: "custom" # Options: efficientnet_b3, resnet50, custom
+  name: "vit" # Options: efficientnet_b3, resnet50, custom
   pretrained: True
   num_classes: 151
   dropout: 0.2

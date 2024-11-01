@@ -1,0 +1,30 @@
+name: kantodex-classifier
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - numpy
+  - pandas
+  - scikit-learn
+  - pytorch
+  - torchvision
+  - cudatoolkit
+  - albumentations
+  - opencv
+  - timm
+  - matplotlib
+  - seaborn
+  - pyyaml
+  - ruff
+  - tqdm
+  - python-dotenv
+  - torchmetrics
+  - graphviz
+  - pip:
+    - kaggle
+    - tensorboard
+    - torch-tb-profiler
+    - tensorboard-plugin-profile
+    - torchviz

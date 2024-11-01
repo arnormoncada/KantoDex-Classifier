@@ -1,0 +1,56 @@
+data:
+  use_both_datasets: True
+  processed_path: "data/processed"
+  test_size: 0.2
+  img_size: [224, 224]
+  num_workers: 4
+  batch_size: 16
+
+training:
+  epochs: 25
+  batch_size: 16
+  optimizer: "adamw" # Options: adamw, adam, sgd, rmsprop
+  optimizer_params:
+    learning_rate: 0.001
+    weight_decay: 0.01
+    momentum: 0.9
+  scheduler: "cosine_annealing_warm_restarts"  # Options: step_lr, cosine, cosine_annealing_warm_restarts, reduce_lr_on_plateau, None
+  scheduler_params:
+    T_0: 10
+    T_mult: 2
+    eta_min: 0.00001
+    gamma: 0.1
+    step_size: 10
+    early_stopping_patience: 15  
+  label_smoothing: 0.1  #
+  checkpoint_path: "models/checkpoints"
+  resume: False
+
+model:
+  name: "vit" # Options: efficientnet_b3, resnet50, custom
+  pretrained: True
+  num_classes: 151
+  dropout: 0.2
+  custom_model_params:
+      drop_prob: 0.2
+      attention_embed_dim: 512
+      attention_num_heads: 8
+      dropblock_block_size: 7
+      max_len: 10000
+
+augmentation:
+  enable: True
+  rand_augment: True
+  horizontal_flip: True
+  vertical_flip: True
+  brightness_contrast: True
+  rotation: True
+  shift_scale_rotate: True
+  gauss_noise: True
+  blur: False
+  elastic_transform: False
+  cutout: True
+  random_erasing: True
+  use_cutmix: False
+  use_mixup: False
+  alpha: 1.0

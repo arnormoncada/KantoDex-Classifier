@@ -570,9 +570,9 @@ def main() -> None:  # noqa: PLR0915, C901, PLR0912
         )
 
         # Calculate additional metrics
-        precision = metrics_calculator.precision.compute().item()
-        recall = metrics_calculator.recall.compute().item()
-        f1_score = metrics_calculator.f1.compute().item()
+        precision = metrics_calculator.precision.compute().item()*100
+        recall = metrics_calculator.recall.compute().item()*100
+        f1_score = metrics_calculator.f1.compute().item()*100
         logging.info(
             f"Precision: {precision:.2f}%, Recall: {recall:.2f}%, F1 Score: {f1_score:.2f}%",
         )

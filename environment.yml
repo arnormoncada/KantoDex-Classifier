@@ -2,6 +2,7 @@ name: kantodex-classifier
 channels:
   - conda-forge
   - defaults
+  - zimmf
 dependencies:
   - python=3.11
   - pip

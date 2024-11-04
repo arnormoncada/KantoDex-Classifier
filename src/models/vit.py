@@ -130,6 +130,8 @@ class VisionTransformer(nn.Module):
         self.norm = nn.LayerNorm(embed_dim)
         self.head = nn.Linear(embed_dim, num_classes)
 
+        self._init_weights()
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:  # noqa: D102
         x = self.patch_embed(x)  # (B, N, C)
         x = self.class_token(x)  # (B, 1+N, C)
@@ -142,6 +144,27 @@ class VisionTransformer(nn.Module):
         cls_token_final = x[:, 0]  # (B, C)
         x = self.head(cls_token_final)  # (B, num_classes)
         return x  # noqa: RET504
+
+    def _init_weights(self) -> None:
+        """Initialize weights."""
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.trunc_normal_(m.weight, std=0.02)
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.LayerNorm):
+                nn.init.constant_(m.bias, 0)
+                nn.init.constant_(m.weight, 1.0)
+            elif isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.MultiheadAttention):
+                nn.init.xavier_uniform_(m.in_proj_weight)
+                nn.init.xavier_uniform_(m.out_proj.weight)
+                if m.in_proj_bias is not None:
+                    nn.init.constant_(m.in_proj_bias, 0)
+                    nn.init.constant_(m.out_proj.bias, 0)
 
 
 # Example usage

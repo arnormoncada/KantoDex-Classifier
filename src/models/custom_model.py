@@ -230,9 +230,9 @@ class KantoDexClassifierCustom(nn.Module):
         )
 
         # Convolutional Blocks
-        self.layer1 = self._make_layer(64, 128, num_blocks=2, stride=1)
-        self.layer2 = self._make_layer(128, 256, num_blocks=2, stride=2)
-        self.layer3 = self._make_layer(256, 512, num_blocks=2, stride=2)
+        self.layer1 = self._make_layer(64, 128, num_blocks=4, stride=1)
+        self.layer2 = self._make_layer(128, 256, num_blocks=7, stride=2)
+        self.layer3 = self._make_layer(256, 512, num_blocks=5, stride=2)
 
         # DropBlock after convolutional layers
         self.dropblock = DropBlock2D(block_size=dropblock_block_size, drop_prob=drop_prob)

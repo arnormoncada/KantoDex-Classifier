@@ -10,7 +10,7 @@ dependencies:
   - scikit-learn
   - pytorch
   - torchvision
-  - cudatoolkit
+  - cudatoolkit  # [not (osx and arm64)]
   - albumentations
   - opencv
   - timm

@@ -28,3 +28,4 @@ dependencies:
     - torch-tb-profiler
     - tensorboard-plugin-profile
     - torchviz
+    - dropblock

@@ -445,7 +445,33 @@ def validate(  # noqa: PLR0913
     metrics = metrics_calculator.compute()
 
     if tensorboard_logger:
-        tensorboard_logger.add_scalar("Epoch Validation Accuracy", metrics["accuracy"], epoch)
+        epoch_val_accuracy = metrics["accuracy"]
+        precision = metrics["precision"]
+        recall = metrics["recall"]
+        f1_score = metrics["f1"]
+
+        tensorboard_logger.add_scalar("Epoch Validation Accuracy", epoch_val_accuracy, epoch + 1)
+        tensorboard_logger.add_scalar("Precision", precision, epoch + 1)
+        tensorboard_logger.add_scalar("Recall", recall, epoch + 1)
+        tensorboard_logger.add_scalar("F1 Score", f1_score, epoch + 1)
+
+        # Log per-class accuracy
+        if hasattr(dataloader.dataset, "classes"):
+            class_names = dataloader.dataset.classes
+        elif hasattr(dataloader.dataset, "class_to_idx"):
+            class_names = list(dataloader.dataset.class_to_idx.keys())
+        else:
+            # Fallback to generic class names if not available
+            class_names = [f"Class {i}" for i in range(metrics_calculator.num_classes)]
+
+        tensorboard_logger.add_class_accuracy(
+            class_names=class_names,
+            class_accuracy=metrics["per_class_accuracy"],
+            global_step=epoch,
+        )
+        logging.info(
+            f"Precision: {precision:.2f}%, Recall: {recall:.2f}%, F1 Score: {f1_score:.2f}%",
+        )
 
     return metrics["accuracy"]
 
@@ -570,9 +596,9 @@ def main() -> None:  # noqa: PLR0915, C901, PLR0912
         )
 
         # Calculate additional metrics
-        precision = metrics_calculator.precision.compute().item()*100
-        recall = metrics_calculator.recall.compute().item()*100
-        f1_score = metrics_calculator.f1.compute().item()*100
+        precision = metrics_calculator.precision.compute().item() * 100
+        recall = metrics_calculator.recall.compute().item() * 100
+        f1_score = metrics_calculator.f1.compute().item() * 100
         logging.info(
             f"Precision: {precision:.2f}%, Recall: {recall:.2f}%, F1 Score: {f1_score:.2f}%",
         )

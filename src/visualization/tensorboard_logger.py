@@ -175,6 +175,36 @@ class TensorBoardLogger:
         if self.enabled and self.writer is not None:
             self.writer.add_figure(tag, figure, global_step, close)
 
+    def add_class_accuracy(
+        self,
+        class_names: list[str],
+        class_accuracy: list[float],
+        global_step: int = 0,
+        title: str = "Per-Class Accuracy",
+    ) -> None:
+        """
+        Log per-class accuracy as a bar chart to TensorBoard.
+
+        Args:
+            class_names (List[str]): List of class names.
+            class_accuracy (List[float]): Corresponding accuracies for each class.
+            global_step (int, optional): Global step value to associate with the logged data.
+            title (str, optional): Title of the bar chart.
+
+        """
+        if self.enabled and self.writer is not None:
+            fig, ax = plt.subplots(figsize=(10, 6))
+            ax.bar(class_names, class_accuracy, color="skyblue")
+            ax.set_xlabel("Classes")
+            ax.set_ylabel("Accuracy (%)")
+            ax.set_title(title)
+            ax.set_ylim(0, 100)  # Assuming accuracy is in percentage
+            plt.xticks(rotation=45, ha="right")
+            plt.tight_layout()
+
+            self.writer.add_figure(title, fig, global_step)
+            plt.close(fig)
+
     def add_text(
         self,
         tag: str,

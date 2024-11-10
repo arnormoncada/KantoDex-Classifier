@@ -4,7 +4,7 @@ from torch import nn
 
 class Bottleneck(nn.Module):
     """
-    Bottleneck block for ResNet-like architectures.
+    Bottleneck block.
 
     This block consists of three convolution layers:
     1. 1x1 convolution for dimensionality reduction

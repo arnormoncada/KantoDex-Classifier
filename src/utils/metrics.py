@@ -8,21 +8,25 @@ class MetricsCalculator:
     def __init__(self, num_classes: int) -> None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.num_classes = num_classes
-        self.correct = [0] * self.num_classes
-        self.total = [0] * self.num_classes
+        self.correct = {}
+        self.total = {}
 
         # Initialize metrics with the 'task' parameter
         self.accuracy = Accuracy(task="multiclass", num_classes=num_classes).to(device)
-        self.precision = Precision(task="multiclass", num_classes=num_classes, average="macro").to(
-            device,
-        )
-        self.recall = Recall(task="multiclass", num_classes=num_classes, average="macro").to(device)
-        self.f1 = F1Score(task="multiclass", num_classes=num_classes, average="macro").to(device)
+        self.precision = Precision(
+            task="multiclass", num_classes=num_classes, average="macro",
+        ).to(device)
+        self.recall = Recall(
+            task="multiclass", num_classes=num_classes, average="macro",
+        ).to(device)
+        self.f1 = F1Score(
+            task="multiclass", num_classes=num_classes, average="macro",
+        ).to(device)
 
     def reset(self):
         """Reset all the metrics to their initial state."""
-        self.correct = [0] * self.num_classes
-        self.total = [0] * self.num_classes
+        self.correct = {}
+        self.total = {}
         self.accuracy.reset()
         self.precision.reset()
         self.recall.reset()
@@ -38,11 +42,19 @@ class MetricsCalculator:
 
         """
         preds = torch.argmax(outputs, dim=1)
-        for label, pred in zip(labels, preds, strict=False):
-            if label == pred:
-                self.correct[label] += 1
-            self.total[label] += 1
 
+        # Ensure labels and preds are on the same device
+        labels = labels.to(preds.device)
+
+        # Update correct and total counts per class
+        for label, pred in zip(labels, preds, strict=False):
+            label_item = label.item()
+            pred_item = pred.item()
+            if label_item == pred_item:
+                self.correct[label_item] = self.correct.get(label_item, 0) + 1
+            self.total[label_item] = self.total.get(label_item, 0) + 1
+
+        # Update torchmetrics metrics
         self.accuracy.update(preds, labels)
         self.precision.update(preds, labels)
         self.recall.update(preds, labels)
@@ -61,9 +73,14 @@ class MetricsCalculator:
         recall = self.recall.compute().item() * 100
         f1_score = self.f1.compute().item() * 100
 
-        per_class_accuracy = [
-            (c / t * 100) if t > 0 else 0.0 for c, t in zip(self.correct, self.total, strict=False)
-        ]
+        per_class_accuracy = {
+            class_id: (self.correct.get(class_id, 0) / self.total.get(class_id, 1)) * 100
+            for class_id in range(self.num_classes)  # Fixed here
+        }
+
+        worst_performing_classes = sorted(
+            per_class_accuracy.items(), key=lambda x: x[1],
+        )
 
         return {
             "accuracy": overall_accuracy,
@@ -71,4 +88,5 @@ class MetricsCalculator:
             "recall": recall,
             "f1": f1_score,
             "per_class_accuracy": per_class_accuracy,
+            "worst_performing_classes": worst_performing_classes,
         }

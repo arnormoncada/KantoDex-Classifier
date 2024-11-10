@@ -416,6 +416,7 @@ def validate(  # noqa: PLR0913
     metrics_calculator: MetricsCalculator,
     tensorboard_logger: TensorBoardLogger | None = None,
     epoch: int = 0,
+    idx_to_label: dict[int, str] | None = None,
 ) -> float:
     """
     Validate the model on the validation dataset.
@@ -428,6 +429,8 @@ def validate(  # noqa: PLR0913
         tensorboard_logger (Optional[TensorBoardLogger], optional): Logger for TensorBoard.
             Default is `None`.
         epoch (int, optional): Current epoch number for logging purposes. Default is `0`.
+        label_to_idx (Optional[dict[=int, str]], optional): Dictionary mapping label indices to
+            class names. Default is `None`.
 
     Returns:
         float: Validation accuracy in percentage.
@@ -455,19 +458,20 @@ def validate(  # noqa: PLR0913
         tensorboard_logger.add_scalar("Recall", recall, epoch + 1)
         tensorboard_logger.add_scalar("F1 Score", f1_score, epoch + 1)
 
-        # Log per-class accuracy
-        if hasattr(dataloader.dataset, "classes"):
-            class_names = dataloader.dataset.classes
-        elif hasattr(dataloader.dataset, "class_to_idx"):
-            class_names = list(dataloader.dataset.class_to_idx.keys())
-        else:
-            # Fallback to generic class names if not available
-            class_names = [f"Class {i}" for i in range(metrics_calculator.num_classes)]
-
         tensorboard_logger.add_class_accuracy(
-            class_names=class_names,
+            class_names=idx_to_label,
             class_accuracy=metrics["per_class_accuracy"],
             global_step=epoch,
+        )
+        # List worst performing classes with names
+        worst_performing_classes = metrics["worst_performing_classes"]
+        worst_performing_classes = {
+            idx_to_label[k]: v for k, v in worst_performing_classes
+        }
+        logging.info(f"Worst performing classes: {worst_performing_classes}")
+        # Save to TensorBoard
+        tensorboard_logger.add_text(
+            "Worst Performing Classes", str(worst_performing_classes), epoch
         )
         logging.info(
             f"Precision: {precision:.2f}%, Recall: {recall:.2f}%, F1 Score: {f1_score:.2f}%",
@@ -530,6 +534,7 @@ def main() -> None:  # noqa: PLR0915, C901, PLR0912
         use_mixup=config["augmentation"].get("use_mixup", False),
         alpha=config["augmentation"].get("alpha", 1.0),
     )
+    idx_to_label = {v: k for k, v in label_to_idx.items()}
 
     # Initialize model, optimizer, scheduler
     model = initialize_model(config, num_classes, device)
@@ -628,6 +633,7 @@ def main() -> None:  # noqa: PLR0915, C901, PLR0912
             metrics_calculator=metrics_calculator,
             tensorboard_logger=tensorboard_logger,
             epoch=epoch + 1,
+            idx_to_label=idx_to_label,
         )
         logging.info(f"Validation Accuracy: {val_accuracy:.2f}%")
 

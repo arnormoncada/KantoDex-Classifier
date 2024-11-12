@@ -3,8 +3,10 @@ import logging
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import torch
 import yaml
+from sklearn.utils.class_weight import compute_class_weight
 from torch import nn, optim
 from torch.amp import GradScaler, autocast
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
@@ -17,6 +19,66 @@ from src.utils.helpers import save_checkpoint
 from src.utils.metrics import MetricsCalculator
 from src.visualization.tensorboard_logger import TensorBoardLogger
 from src.visualization.visualize_model import visualize_model_structure
+
+
+def get_class_weights(labels, num_classes, device):
+    """
+    Compute class weights to handle class imbalance.
+
+    Args:
+        labels (List[int]): List of label indices.
+        num_classes (int): Total number of classes.
+        device (torch.device): Device to load the weights on.
+
+    Returns:
+        torch.Tensor: Tensor containing weights for each class.
+
+    """
+    class_weights = compute_class_weight(
+        class_weight='balanced',
+        classes=np.arange(num_classes),
+        y=labels,
+    )
+    return torch.tensor(class_weights, dtype=torch.float).to(device)
+
+
+class FocalLoss(nn.Module):
+    """
+    Focal Loss for addressing class imbalance by down-weighting easy examples.
+
+    Args:
+        alpha (float | List[float]): Weighting factor for each class.
+        gamma (float): Focusing parameter to reduce the loss for well-classified examples.
+        reduction (str): Reduction method to apply to the output ('mean', 'sum', 'none').
+
+    """
+
+    def __init__(self, alpha: torch.Tensor = None, gamma: float = 2.0, reduction: str = 'mean') -> None:
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.reduction = reduction
+
+    def forward(self, inputs, targets):
+        """
+        Forward pass for FocalLoss.
+
+        Args:
+            inputs (torch.Tensor): Model predictions.
+            targets (torch.Tensor): Ground truth labels.
+
+        Returns:
+            torch.Tensor: Computed focal loss.
+        """
+        ce_loss = nn.functional.cross_entropy(inputs, targets, reduction='none', weight=self.alpha)
+        pt = torch.exp(-ce_loss)
+        focal_loss = ((1 - pt) ** self.gamma) * ce_loss
+
+        if self.reduction == 'mean':
+            return focal_loss.mean()
+        if self.reduction == 'sum':
+            return focal_loss.sum()
+        return focal_loss
 
 
 def parse_args() -> argparse.Namespace:
@@ -471,7 +533,7 @@ def validate(  # noqa: PLR0913
         logging.info(f"Worst performing classes: {worst_performing_classes}")
         # Save to TensorBoard
         tensorboard_logger.add_text(
-            "Worst Performing Classes", str(worst_performing_classes), epoch
+            "Worst Performing Classes", str(worst_performing_classes), epoch,
         )
         logging.info(
             f"Precision: {precision:.2f}%, Recall: {recall:.2f}%, F1 Score: {f1_score:.2f}%",
@@ -548,8 +610,14 @@ def main() -> None:  # noqa: PLR0915, C901, PLR0912
 
     # Loss function with Label Smoothing
     label_smoothing = config["training"].get("label_smoothing", 0.1)
-    criterion = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
-
+    # Initialize class weights
+    class_weights = get_class_weights(
+        labels=[idx for idx in label_to_idx.values()],
+        num_classes=num_classes,
+        device=device,
+    )
+    # Initialize Focal Loss
+    criterion = FocalLoss(alpha=class_weights, gamma=2.0, reduction='mean')
     metrics_calculator = MetricsCalculator(num_classes=num_classes)
 
     # Mixed Precision Scaler

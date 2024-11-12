@@ -7,11 +7,11 @@ data:
   batch_size: 100
 
 training:
-  epochs: 150
+  epochs: 300
   batch_size: 100
   optimizer: "adamw" # Options: adamw, adam, sgd, rmsprop
   optimizer_params:
-    learning_rate: 0.0001 # lower this to 0.00005 for ViT
+    learning_rate: 0.01 # lower this to 0.00005 for ViT
     weight_decay: 0.01
     momentum: 0.9
   scheduler: "reduce_lr_on_plateau"  # Options: step_lr, cosine, cosine_annealing_warm_restarts, reduce_lr_on_plateau, None
@@ -21,7 +21,7 @@ training:
     eta_min: 0.00001
     gamma: 0.1
     step_size: 10
-  early_stopping_patience: 25
+  early_stopping_patience: 50
   label_smoothing: 0.1  #
   checkpoint_path: "models/checkpoints"
   resume: False

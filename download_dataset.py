@@ -1,11 +1,10 @@
 import logging
-import os
 import shutil
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
 import yaml
+from dotenv import load_dotenv
 
 
 def download_kaggle_dataset(dataset_name, download_path):

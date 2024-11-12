@@ -58,7 +58,7 @@ class PatchEmbedding(nn.Module):
 class MLP(nn.Module):
     """Multi-Layer Perceptron for the Transformer Encoder Block."""
 
-    def __init__(self, embed_dim, expansion, dropout):
+    def __init__(self, embed_dim: int, expansion: int, dropout: float) -> None:
         super().__init__()
         self.fc1 = nn.Linear(embed_dim, embed_dim * expansion)
         self.gelu = nn.GELU()
@@ -155,7 +155,7 @@ class TransformerEncoderLayer(nn.Module):
     def forward(self, x):  # noqa: D102
         norm1 = self.norm1(x)
         # Skip connection 1
-        x = x + self.MHA(norm1, norm1, norm1)[0]
+        x = x + self.MHA(norm1)
         x = self.dropout(x)
 
         norm2 = self.norm2(x)
@@ -173,7 +173,7 @@ class TransformerEncoder(nn.Module):  # noqa: D101
             [
                 TransformerEncoderLayer(embed_dim, num_heads, expansion, dropout)
                 for _ in range(num_encoders)
-            ]
+            ],
         )
 
     def forward(self, x):  # noqa: D102
@@ -192,9 +192,9 @@ class VisionTransformer(nn.Module):
         in_channels: int = 3,
         num_classes: int = 151,
         embed_dim: int = 1280,
-        num_encoders: int = 12,
-        num_heads: int = 12,
-        mlp_ratio: float = 4.0,
+        num_encoders: int = 32,
+        num_heads: int = 16,
+        expansion: int = 4,
         dropout: float = 0.1,
     ) -> None:
         super().__init__()
@@ -210,7 +210,7 @@ class VisionTransformer(nn.Module):
         self.transformer = TransformerEncoder(
             embed_dim,
             num_heads,
-            mlp_ratio,
+            expansion,
             dropout,
             num_encoders,
         )
@@ -260,18 +260,11 @@ if __name__ == "__main__":
     width = 224
     num_classes = 151
 
-    model = VisionTransformer(
-        img_size=224,
-        patch_size=14,
-        in_channels=3,
-        num_classes=num_classes,
-        embed_dim=1280,
-        num_encoders=12,
-        num_heads=12,
-        mlp_ratio=4.0,
-        dropout=0.1,
-    )
+    model = VisionTransformer()
 
     inputs = torch.randn(batch_size, channels, height, width)
     outputs = model(inputs)
     print(f"Output shape: {outputs.shape}")  # Expected: (8, 151)
+
+    # Print model summary
+    print(model)

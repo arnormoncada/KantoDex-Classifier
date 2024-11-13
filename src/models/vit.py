@@ -192,7 +192,7 @@ class VisionTransformer(nn.Module):
         in_channels: int = 3,
         num_classes: int = 151,
         embed_dim: int = 1280,
-        num_encoders: int = 32,
+        num_encoders: int = 8,
         num_heads: int = 16,
         expansion: int = 4,
         dropout: float = 0.1,

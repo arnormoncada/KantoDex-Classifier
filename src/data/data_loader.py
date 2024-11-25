@@ -8,6 +8,7 @@ import numpy as np
 import torch
 from PIL import Image
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 
@@ -15,7 +16,7 @@ from src.augmentation.augmentor import DataAugmentor
 
 
 class PokemonDataset(Dataset):
-    """PokemonDataset is a custom Dataset for loading Pokémon images and labels."""
+    """Custom Dataset for loading Pokémon images and labels."""
 
     def __init__(
         self,
@@ -66,23 +67,25 @@ class PokemonDataset(Dataset):
         img_path = self.image_paths[idx]
         label = self.labels[idx]
         try:
-            with open(img_path, "rb") as f:
-                image = Image.open(f).convert("RGBA")
-                # Convert to RGB if the image has transparency
-                if image.mode == "RGBA":
-                    background = Image.new("RGB", image.size, (255, 255, 255))
-                    background.paste(image, mask=image.split()[3])  # 3 is the alpha channel
-                    image = background
-                else:
-                    image = image.convert("RGB")
-        except Exception:
-            logging.exception(f"Error loading image {img_path}")
+            image = Image.open(img_path).convert("RGBA")
+            # Convert to RGB if the image has transparency
+            if image.mode == "RGBA":
+                background = Image.new("RGB", image.size, (255, 255, 255))
+                background.paste(image, mask=image.split()[3])  # 3 is the alpha channel
+                image = background
+            else:
+                image = image.convert("RGB")
+        except Exception as e:
+            logging.exception(f"Error loading image {img_path}: {e}")
             # Return a black image in case of error
             image = Image.new("RGB", (224, 224), (0, 0, 0))
-        if self.augmentor:
+
+        if self.augmentor and self.augment:
             image = self.augmentor.augment(image)
+
         if self.transform:
             image = self.transform(image)
+
         return image, label
 
 
@@ -106,12 +109,11 @@ def collate_fn(
 
     """
     images, labels = zip(*batch, strict=False)
-    # Resize images to the same size
-    images = [transforms.functional.resize(img, (224, 224)) for img in images]
     images = torch.stack(images)
-    labels = torch.tensor(labels)
+    labels = torch.tensor(labels, dtype=torch.long)
 
     CUTMIX_PROBABILITY = 0.5
+    MIXUP_PROBABILITY = 0.5
     rng = np.random.default_rng()
 
     if use_cutmix and random.random() < CUTMIX_PROBABILITY:
@@ -140,7 +142,7 @@ def collate_fn(
         lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (W * H))
         labels = lam * labels.float() + (1 - lam) * shuffled_labels.float()
 
-    elif use_mixup and random.random() < CUTMIX_PROBABILITY:
+    elif use_mixup and random.random() < MIXUP_PROBABILITY:
         lam = rng.beta(alpha, alpha)
         batch_size = images.size(0)
         index = torch.randperm(batch_size)
@@ -159,11 +161,12 @@ def load_data(  # noqa: PLR0913
     processed_path: str,
     test_size: float = 0.2,
     batch_size: int = 32,
-    img_size: tuple = (224, 224),
+    img_size: tuple[int, int] = (224, 224),
     num_workers: int = 4,
     use_cutmix: bool = False,
     use_mixup: bool = False,
     alpha: float = 1.0,
+    seed: int = 42,
 ) -> tuple[DataLoader, DataLoader, dict[str, int]]:
     """
     Load and prepare the training and validation data loaders.
@@ -172,19 +175,26 @@ def load_data(  # noqa: PLR0913
         processed_path (str): Path to the processed data directory.
         test_size (float, optional): Proportion of data to use for validation.
         batch_size (int, optional): Batch size for data loaders.
-        img_size (tuple, optional): Desired image size as (height, width).
+        img_size (Tuple[int, int], optional): Desired image size as (height, width).
         num_workers (int, optional): Number of subprocesses for data loading.
         use_cutmix (bool, optional): Whether to apply CutMix augmentation.
         use_mixup (bool, optional): Whether to apply MixUp augmentation.
         alpha (float, optional): Parameter for the beta distribution used in CutMix and MixUp.
+        seed (int, optional): Random seed for reproducibility.
 
     Returns:
         Tuple[DataLoader, DataLoader, Dict[str, int]]: (train_loader, val_loader, label_to_idx)
 
     """
+    # Set random seeds for reproducibility
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+
     processed_path = Path(processed_path)
     if not processed_path.exists():
         msg = f"Processed data path {processed_path} does not exist."
+        logging.error(msg)
         raise FileNotFoundError(msg)
 
     image_paths = []
@@ -193,30 +203,33 @@ def load_data(  # noqa: PLR0913
         if label_dir.is_dir():
             label = label_dir.name
             for img_file in label_dir.glob("*.*"):
-                if img_file.suffix.lower() in [".png", ".jpg", ".jpeg", ".bmp", ".gif"]:
+                if img_file.suffix.lower() in {".png", ".jpg", ".jpeg", ".bmp", ".gif"}:
                     image_paths.append(str(img_file))
                     labels.append(label)
 
     if not image_paths:
         msg = f"No images found in {processed_path}"
+        logging.error(msg)
         raise ValueError(msg)
 
-    # Encode labels
-    label_to_idx = {label: idx for idx, label in enumerate(sorted(set(labels)))}
-    labels = [label_to_idx[label] for label in labels]
+    # Encode labels using LabelEncoder for consistency
+    label_encoder = LabelEncoder()
+    labels_encoded = label_encoder.fit_transform(labels)
+    label_to_idx = {label: idx for idx, label in enumerate(label_encoder.classes_)}
 
     # Split data
     train_paths, val_paths, train_labels, val_labels = train_test_split(
         image_paths,
-        labels,
+        labels_encoded,
         test_size=test_size,
-        stratify=labels,
-        random_state=42,
+        stratify=labels_encoded,
+        random_state=seed,
     )
 
-    # Define transforms: Only ToTensor and Normalize
+    # Define transforms
     transform_train = transforms.Compose(
         [
+            transforms.Resize(img_size),
             transforms.ToTensor(),
             transforms.Normalize(
                 mean=[0.485, 0.456, 0.406],
@@ -227,6 +240,7 @@ def load_data(  # noqa: PLR0913
 
     transform_val = transforms.Compose(
         [
+            transforms.Resize(img_size),
             transforms.ToTensor(),
             transforms.Normalize(
                 mean=[0.485, 0.456, 0.406],
@@ -235,16 +249,22 @@ def load_data(  # noqa: PLR0913
         ],
     )
 
+    # Initialize DataAugmentor if necessary
     augmentor = DataAugmentor(img_size=img_size) if use_cutmix or use_mixup else None
 
     train_dataset = PokemonDataset(
-        train_paths,
-        train_labels,
+        image_paths=train_paths,
+        labels=train_labels,
         augment=True,
         transform=transform_train,
         augmentor=augmentor,
     )
-    val_dataset = PokemonDataset(val_paths, val_labels, augment=False, transform=transform_val)
+    val_dataset = PokemonDataset(
+        image_paths=val_paths,
+        labels=val_labels,
+        augment=False,
+        transform=transform_val,
+    )
 
     partial_collate_fn = partial(
         collate_fn,
@@ -254,7 +274,7 @@ def load_data(  # noqa: PLR0913
     )
 
     train_loader = DataLoader(
-        train_dataset,
+        dataset=train_dataset,
         batch_size=batch_size,
         shuffle=True,
         num_workers=num_workers,
@@ -263,7 +283,7 @@ def load_data(  # noqa: PLR0913
         collate_fn=partial_collate_fn,
     )
     val_loader = DataLoader(
-        val_dataset,
+        dataset=val_dataset,
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
@@ -271,5 +291,10 @@ def load_data(  # noqa: PLR0913
         prefetch_factor=2,
         collate_fn=partial_collate_fn,
     )
+
+    logging.info(
+        f"Loaded {len(train_dataset)} training samples and {len(val_dataset)} validation samples.",
+    )
+    logging.info(f"Number of classes: {len(label_to_idx)}")
 
     return train_loader, val_loader, label_to_idx

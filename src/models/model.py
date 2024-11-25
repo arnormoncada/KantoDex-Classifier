@@ -3,6 +3,7 @@ from torchvision import models
 
 from src.models.custom_model import KantoDexClassifierCustom
 from src.models.vit import VisionTransformer
+from src.models.custom_v2 import DeepCNN
 
 
 class KantoDexClassifier(nn.Module):
@@ -63,23 +64,17 @@ class KantoDexClassifier(nn.Module):
                 max_len=custom_config.get("max_len", 10000),
             )
         elif model_name == "vit":
-            self.backbone = VisionTransformer(
-                img_size=224,
-                patch_size=16,
-                in_channels=3,
-                num_classes=151,
-                embed_dim=768,
-                depth=12,
-                num_heads=12,
-                mlp_ratio=4.0,
-                dropout=0.1,
-            )
+            self.backbone = VisionTransformer()
+        elif model_name == "deep_cnn":
+            self.backbone = DeepCNN(num_classes=num_classes, dropout=drop_prob)
         else:
             msg = f"Invalid model name: {model_name}"
             raise ValueError(msg)
         # Optional: Initialize weights for the new classifier
-        if model_name != "custom":
+        if model_name == "custom":
             self._initialize_weights_for_custom()
+        elif model_name == "deep_cnn":
+            pass
         else:
             self._initialize_weights()
 

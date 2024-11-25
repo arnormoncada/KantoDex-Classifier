@@ -3,8 +3,10 @@ import logging
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import torch
 import yaml
+from sklearn.utils.class_weight import compute_class_weight
 from torch import nn, optim
 from torch.amp import GradScaler, autocast
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
@@ -17,6 +19,72 @@ from src.utils.helpers import save_checkpoint
 from src.utils.metrics import MetricsCalculator
 from src.visualization.tensorboard_logger import TensorBoardLogger
 from src.visualization.visualize_model import visualize_model_structure
+
+
+def get_class_weights(labels: list[int], num_classes: int, device: torch.device) -> torch.Tensor:
+    """
+    Compute class weights to handle class imbalance.
+
+    Args:
+        labels (List[int]): List of label indices.
+        num_classes (int): Total number of classes.
+        device (torch.device): Device to load the weights on.
+
+    Returns:
+        torch.Tensor: Tensor containing weights for each class.
+
+    """
+    class_weights = compute_class_weight(
+        class_weight="balanced",
+        classes=np.arange(num_classes),
+        y=labels,
+    )
+    return torch.tensor(class_weights, dtype=torch.float).to(device)
+
+
+class FocalLoss(nn.Module):
+    """
+    Focal Loss for addressing class imbalance by down-weighting easy examples.
+
+    Args:
+        alpha (Optional[torch.Tensor]): Weighting factor for each class.
+        gamma (float): Focusing parameter to reduce the loss for well-classified examples.
+        reduction (str): Reduction method to apply to the output ('mean', 'sum', 'none').
+
+    """
+
+    def __init__(
+        self,
+        alpha: torch.Tensor | None = None,
+        gamma: float = 2.0,
+        reduction: str = "mean",
+    ) -> None:
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.reduction = reduction
+
+    def forward(self, inputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass for FocalLoss.
+
+        Args:
+            inputs (torch.Tensor): Model predictions.
+            targets (torch.Tensor): Ground truth labels.
+
+        Returns:
+            torch.Tensor: Computed focal loss.
+
+        """
+        ce_loss = nn.functional.cross_entropy(inputs, targets, reduction="none", weight=self.alpha)
+        pt = torch.exp(-ce_loss)
+        focal_loss = ((1 - pt) ** self.gamma) * ce_loss
+
+        if self.reduction == "mean":
+            return focal_loss.mean()
+        if self.reduction == "sum":
+            return focal_loss.sum()
+        return focal_loss
 
 
 def parse_args() -> argparse.Namespace:
@@ -51,7 +119,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--enable_tensorboard",
         action="store_true",
-        default=True,
+        default=False,
         help="Enable TensorBoard logging.",
     )
     parser.add_argument(
@@ -173,7 +241,7 @@ def initialize_optimizer(config: dict[str, Any], model: nn.Module) -> optim.Opti
 
     """
     optimizer_name = config["training"].get("optimizer", "adamw").lower()
-    optimizer_params = config["training"]["optimizer_params"]
+    optimizer_params = config["training"].get("optimizer_params", {})
     if optimizer_name == "adamw":
         optimizer = optim.AdamW(
             model.parameters(),
@@ -308,7 +376,7 @@ def resume_training(  # noqa: PLR0913
         FileNotFoundError: If no checkpoint is found and resume is attempted.
 
     """
-    checkpoint_dir = Path(config["training"]["checkpoint_path"])
+    checkpoint_dir = Path(config["training"].get("checkpoint_path", "checkpoints"))
     checkpoints = list(checkpoint_dir.glob("checkpoint_epoch_*.pth"))
     if checkpoints:
         latest_checkpoint = max(checkpoints, key=lambda x: x.stat().st_mtime)
@@ -319,7 +387,7 @@ def resume_training(  # noqa: PLR0913
         scaler.load_state_dict(checkpoint["scaler_state_dict"])
         if scheduler and "scheduler_state_dict" in checkpoint:
             scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
-        start_epoch = checkpoint["epoch"]
+        start_epoch = checkpoint.get("epoch", 0)
         best_accuracy = checkpoint.get("best_accuracy", 0.0)
         logging.info(
             f"Resumed training from epoch {start_epoch} with best accuracy {best_accuracy:.2f}%.",
@@ -368,7 +436,7 @@ def train_epoch(  # noqa: PLR0913
     model.train()
     running_loss = 0.0
 
-    for batch_idx, batch in enumerate(tqdm(dataloader, desc="Training", unit="batch")):
+    for batch_idx, batch in enumerate(tqdm(dataloader, desc="Training", unit="batch", leave=False)):
         images, labels = batch
 
         if use_cutmix or use_mixup:
@@ -404,9 +472,13 @@ def train_epoch(  # noqa: PLR0913
 
     if tensorboard_logger:
         tensorboard_logger.add_scalar("Epoch Training Loss", avg_loss, epoch)
-        tensorboard_logger.add_scalar("Epoch Training Accuracy", metrics["accuracy"], epoch)
+        tensorboard_logger.add_scalar(
+            "Epoch Training Accuracy",
+            metrics.get("accuracy", 0.0),
+            epoch,
+        )
 
-    return avg_loss, metrics["accuracy"]
+    return avg_loss, metrics.get("accuracy", 0.0)
 
 
 def validate(  # noqa: PLR0913
@@ -416,6 +488,7 @@ def validate(  # noqa: PLR0913
     metrics_calculator: MetricsCalculator,
     tensorboard_logger: TensorBoardLogger | None = None,
     epoch: int = 0,
+    idx_to_label: dict[int, str] | None = None,
 ) -> float:
     """
     Validate the model on the validation dataset.
@@ -428,6 +501,8 @@ def validate(  # noqa: PLR0913
         tensorboard_logger (Optional[TensorBoardLogger], optional): Logger for TensorBoard.
             Default is `None`.
         epoch (int, optional): Current epoch number for logging purposes. Default is `0`.
+        idx_to_label (Optional[dict[int, str]], optional): Dictionary mapping label indices to
+            class names. Default is `None`.
 
     Returns:
         float: Validation accuracy in percentage.
@@ -436,7 +511,7 @@ def validate(  # noqa: PLR0913
     model.eval()
     metrics_calculator.reset()
     with torch.no_grad():
-        for batch in tqdm(dataloader, desc="Validation", unit="batch"):
+        for batch in tqdm(dataloader, desc="Validation", unit="batch", leave=False):
             images, labels = batch
             images = images.to(device)
             labels = labels.to(device)
@@ -445,20 +520,58 @@ def validate(  # noqa: PLR0913
     metrics = metrics_calculator.compute()
 
     if tensorboard_logger:
-        tensorboard_logger.add_scalar("Epoch Validation Accuracy", metrics["accuracy"], epoch)
+        epoch_val_accuracy = metrics.get("accuracy", 0.0)
+        precision = metrics.get("precision", 0.0)
+        recall = metrics.get("recall", 0.0)
+        f1_score = metrics.get("f1", 0.0)
 
-    return metrics["accuracy"]
+        tensorboard_logger.add_scalar("Epoch Validation Accuracy", epoch_val_accuracy, epoch + 1)
+        tensorboard_logger.add_scalar("Precision", precision, epoch + 1)
+        tensorboard_logger.add_scalar("Recall", recall, epoch + 1)
+        tensorboard_logger.add_scalar("F1 Score", f1_score, epoch + 1)
+
+        if idx_to_label:
+            tensorboard_logger.add_class_accuracy(
+                class_names=list(idx_to_label.values()),
+                class_accuracy=metrics.get("per_class_accuracy", {}),
+                global_step=epoch,
+            )
+            # List worst performing classes with names
+            worst_performing = metrics.get("worst_performing_classes", {})
+            worst_performing_named = {
+                idx_to_label.get(k, f"Class_{k}"): v for k, v in worst_performing.items()
+            }
+            logging.info(f"Worst performing classes: {worst_performing_named}")
+            # Save to TensorBoard
+            tensorboard_logger.add_text(
+                "Worst Performing Classes",
+                str(worst_performing_named),
+                epoch,
+            )
+            # Add each class accuracy to TensorBoard
+            for idx, acc in metrics.get("per_class_accuracy", {}).items():
+                class_name = idx_to_label.get(idx, f"Class_{idx}")
+                tensorboard_logger.add_scalar(
+                    f"Class Accuracy/{class_name}",
+                    acc,
+                    epoch,
+                )
+        logging.info(
+            f"Precision: {precision:.2f}%, Recall: {recall:.2f}%, F1 Score: {f1_score:.2f}%",
+        )
+
+    return metrics.get("accuracy", 0.0)
 
 
 def main() -> None:  # noqa: PLR0915, C901, PLR0912
-    print("Training the model...")
+    logging.info("Starting training process...")
     args = parse_args()
     setup_logging()
     config = load_config(args.config)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logging.info(f"Using device: {device}")
 
-    # Load data to determine number of classes before initializing the model
+    # Load actual training and validation data to determine number of classes
     train_loader_dummy, val_loader_dummy, label_to_idx_dummy = load_data(
         processed_path=config["data"]["processed_path"],
         test_size=config["data"]["test_size"],
@@ -488,36 +601,48 @@ def main() -> None:  # noqa: PLR0915, C901, PLR0912
             enabled=True,
         )
         # Add model graph with the actual model and a sample input
-        sample_images, _ = next(iter(train_loader_dummy))
-        sample_images = sample_images.to(device)
-        tensorboard_logger.add_graph(model, sample_images)
-        logging.info("Model graph added to TensorBoard.")
+        try:
+            sample_images, _ = next(iter(train_loader_dummy))
+            sample_images = sample_images.to(device)
+            tensorboard_logger.add_graph(model, sample_images)
+            logging.info("Model graph added to TensorBoard.")
+        except StopIteration:
+            logging.warning("Training data loader is empty. Skipping TensorBoard graph addition.")
 
     # Load actual training and validation data
     train_loader, val_loader, label_to_idx = load_data(
         processed_path=config["data"]["processed_path"],
         test_size=config["data"]["test_size"],
-        batch_size=config["training"]["batch_size"],
+        batch_size=config["training"].get("batch_size", 32),
         img_size=tuple(config["data"]["img_size"]),
         num_workers=config["data"]["num_workers"],
         use_cutmix=config["augmentation"].get("use_cutmix", False),
         use_mixup=config["augmentation"].get("use_mixup", False),
         alpha=config["augmentation"].get("alpha", 1.0),
     )
+    idx_to_label = {v: k for k, v in label_to_idx.items()}
 
-    # Initialize model, optimizer, scheduler
-    model = initialize_model(config, num_classes, device)
+    # Initialize optimizer and scheduler
     optimizer = initialize_optimizer(config, model)
     scheduler = initialize_scheduler(config, optimizer)
 
-    # Update TensorBoard graph with the actual model if logger is enabled
-    if tensorboard_logger and tensorboard_logger.enabled:
-        tensorboard_logger.add_graph(model, sample_images)
-        logging.info("Model graph added to TensorBoard.")
-
     # Loss function with Label Smoothing
-    label_smoothing = config["training"].get("label_smoothing", 0.1)
-    criterion = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
+    label_smoothing = config["training"].get("label_smoothing", 0.0)
+    if label_smoothing > 0.0:
+        criterion = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
+        logging.info(f"Using CrossEntropyLoss with label smoothing: {label_smoothing}")
+    else:
+        # Initialize class weights
+        all_train_labels = []
+        for _, labels in train_loader:
+            all_train_labels.extend(labels.tolist())
+        class_weights = get_class_weights(
+            labels=all_train_labels,
+            num_classes=num_classes,
+            device=device,
+        )
+        criterion = FocalLoss(alpha=class_weights, gamma=2.0, reduction="mean")
+        logging.info("Using FocalLoss with class weights.")
 
     metrics_calculator = MetricsCalculator(num_classes=num_classes)
 
@@ -545,7 +670,7 @@ def main() -> None:  # noqa: PLR0915, C901, PLR0912
     if args.visualize_model:
         visualize_model_structure(model)
 
-    num_epochs = config["training"]["epochs"]
+    num_epochs = config["training"].get("epochs", 100)
     for epoch in range(start_epoch, num_epochs):
         logging.info(f"Starting epoch {epoch + 1}/{num_epochs}")
 
@@ -559,9 +684,9 @@ def main() -> None:  # noqa: PLR0915, C901, PLR0912
             scaler=scaler,
             metrics_calculator=metrics_calculator,
             tensorboard_logger=tensorboard_logger,
-            use_cutmix=config["training"].get("use_cutmix", False),
-            use_mixup=config["training"].get("use_mixup", False),
-            alpha=config["training"].get("alpha", 1.0),
+            use_cutmix=config["augmentation"].get("use_cutmix", False),
+            use_mixup=config["augmentation"].get("use_mixup", False),
+            alpha=config["augmentation"].get("alpha", 1.0),
             epoch=epoch + 1,
         )
         logging.info(
@@ -570,9 +695,11 @@ def main() -> None:  # noqa: PLR0915, C901, PLR0912
         )
 
         # Calculate additional metrics
-        precision = metrics_calculator.precision.compute().item()*100
-        recall = metrics_calculator.recall.compute().item()*100
-        f1_score = metrics_calculator.f1.compute().item()*100
+        metrics = metrics_calculator.compute()
+        precision = metrics.get("precision", 0.0)
+        recall = metrics.get("recall", 0.0)
+        f1_score = metrics.get("f1", 0.0)
+
         logging.info(
             f"Precision: {precision:.2f}%, Recall: {recall:.2f}%, F1 Score: {f1_score:.2f}%",
         )
@@ -602,6 +729,7 @@ def main() -> None:  # noqa: PLR0915, C901, PLR0912
             metrics_calculator=metrics_calculator,
             tensorboard_logger=tensorboard_logger,
             epoch=epoch + 1,
+            idx_to_label=idx_to_label,
         )
         logging.info(f"Validation Accuracy: {val_accuracy:.2f}%")
 
@@ -615,10 +743,10 @@ def main() -> None:  # noqa: PLR0915, C901, PLR0912
                 tensorboard_logger.add_scalar("Best Accuracy", best_accuracy, epoch + 1)
         else:
             epochs_no_improve += 1
-            logging.info(f"No improvement in validation accuracy for {epochs_no_improve} epochs.")
+            logging.info(f"No improvement in validation accuracy for {epochs_no_improve} epoch(s).")
 
         # Save checkpoint
-        checkpoint_dir = Path(config["training"]["checkpoint_path"])
+        checkpoint_dir = Path(config["training"].get("checkpoint_path", "checkpoints"))
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
         save_checkpoint(
             model=model,

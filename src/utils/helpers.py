@@ -18,7 +18,7 @@ def save_checkpoint(  # noqa: PLR0913
     best_accuracy: float | None = None,
 ) -> None:
     """
-    Save the model checkpoint.
+    Save the model checkpoint and keep only the latest two checkpoints.
 
     Args:
         model (nn.Module): The model to save.
@@ -46,6 +46,16 @@ def save_checkpoint(  # noqa: PLR0913
     checkpoint_file = checkpoint_path / f"checkpoint_epoch_{epoch + 1}.pth"
     torch.save(checkpoint, checkpoint_file)
     logging.info(f"Checkpoint saved at {checkpoint_file}")
+
+    # Manage to keep only the latest two checkpoints
+    checkpoints = sorted(
+        checkpoint_path.glob("checkpoint_epoch_*.pth"),
+        key=lambda x: int(x.stem.split("_")[-1]),
+        reverse=True,
+    )
+    for old_ckpt in checkpoints[2:]:
+        old_ckpt.unlink()
+        logging.info(f"Removed old checkpoint {old_ckpt}")
 
     if is_best and best_accuracy is not None:
         best_path = checkpoint_path / "best_model.pth"

@@ -93,3 +93,6 @@ tests/__pycache__/
 .env.development.local
 .env.test.local
 .env.production.local
+
+# nori file named githubkey.txtx :D
+githubkey.txt

@@ -3,12 +3,12 @@ data:
   processed_path: "data/processed"
   test_size: 0.2
   img_size: [224, 224]
-  num_workers: 2 # Reduce this to 1-2 for ViT
-  batch_size: 32 # Reduce this to 16-32 for ViT
+  num_workers: 4 # Reduce this to 1-2 for ViT
+  batch_size: 500 # Reduce this to 16-32 for ViT, needs to be even if using mixup/cutmix
 
 training:
   epochs: 300
-  batch_size: 100
+  batch_size: 500 # Reduce this to 16-32 for ViT, needs to be even if using mixup/cutmix
   optimizer: "adamw" # Options: adamw, adam, sgd, rmsprop
   optimizer_params:
     learning_rate: 0.0005 # lower this to 0.00005 for ViT
@@ -27,12 +27,12 @@ training:
   resume: False
 
 model:
-  name: "vit" # Options: efficientnet_b3, resnet50, custom, vit, deep_cnn
-  pretrained: True
+  name: "custom" # Options: efficientnet_b3, resnet50, custom, vit, deep_cnn
+  pretrained: False
   num_classes: 151
-  dropout: 0.3
+  dropout: 0.2
   custom_model_params:
-      drop_prob: 0.3
+      drop_prob: 0.2
       attention_embed_dim: 512
       attention_num_heads: 8
       dropblock_block_size: 7
@@ -47,10 +47,10 @@ augmentation:
   rotation: True
   shift_scale_rotate: True
   gauss_noise: True
-  blur: False
-  elastic_transform: False
+  blur: True
+  elastic_transform: True
   cutout: True
   random_erasing: True
-  use_cutmix: False
-  use_mixup: False
+  use_cutmix: True
+  use_mixup: True
   alpha: 1.0

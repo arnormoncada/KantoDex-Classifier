@@ -1,7 +1,6 @@
 import logging
 import random
 from collections.abc import Callable
-from functools import partial
 from pathlib import Path
 
 import numpy as np
@@ -89,83 +88,19 @@ class PokemonDataset(Dataset):
         return image, label
 
 
-def collate_fn(
-    batch: list[tuple[torch.Tensor, int]],
-    use_cutmix: bool = False,
-    use_mixup: bool = False,
-    alpha: float = 1.0,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Apply CutMix and MixUp augmentations at the batch level.
-
-    Args:
-        batch (List[Tuple[torch.Tensor, int]]): List of tuples containing images and labels.
-        use_cutmix (bool, optional): Whether to apply CutMix augmentation.
-        use_mixup (bool, optional): Whether to apply MixUp augmentation.
-        alpha (float, optional): Parameter for the beta distribution used in CutMix and MixUp.
-
-    Returns:
-        Tuple[torch.Tensor, torch.Tensor]: Batch of images and adjusted labels.
-
-    """
+def collate_fn(batch: list[tuple[torch.Tensor, int]]) -> tuple[torch.Tensor, torch.Tensor]:
     images, labels = zip(*batch, strict=False)
     images = torch.stack(images)
     labels = torch.tensor(labels, dtype=torch.long)
-
-    CUTMIX_PROBABILITY = 0.5
-    MIXUP_PROBABILITY = 0.5
-    rng = np.random.default_rng()
-
-    if use_cutmix and random.random() < CUTMIX_PROBABILITY:
-        lam = rng.beta(alpha, alpha)
-        batch_size, C, H, W = images.size()
-        index = torch.randperm(batch_size)
-        shuffled_images = images[index]
-        shuffled_labels = labels[index]
-
-        cut_rat = np.sqrt(1.0 - lam)
-        cut_w = int(W * cut_rat)
-        cut_h = int(H * cut_rat)
-
-        # Uniformly sample the center of the patch
-        cx = rng.integers(W)
-        cy = rng.integers(H)
-
-        bbx1 = np.clip(cx - cut_w // 2, 0, W)
-        bby1 = np.clip(cy - cut_h // 2, 0, H)
-        bbx2 = np.clip(cx + cut_w // 2, 0, W)
-        bby2 = np.clip(cy + cut_h // 2, 0, H)
-
-        images[:, :, bby1:bby2, bbx1:bbx2] = shuffled_images[:, :, bby1:bby2, bbx1:bbx2]
-
-        # Adjust lambda based on the actual area of the patch
-        lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (W * H))
-        labels = lam * labels.float() + (1 - lam) * shuffled_labels.float()
-
-    elif use_mixup and random.random() < MIXUP_PROBABILITY:
-        lam = rng.beta(alpha, alpha)
-        batch_size = images.size(0)
-        index = torch.randperm(batch_size)
-        shuffled_images = images[index]
-        shuffled_labels = labels[index]
-
-        images = lam * images + (1 - lam) * shuffled_images
-        labels = lam * labels.float() + (1 - lam) * shuffled_labels.float()
-    else:
-        labels = labels.float()
-
     return images, labels
 
 
-def load_data(  # noqa: PLR0913
+def load_data(
     processed_path: str,
     test_size: float = 0.2,
     batch_size: int = 32,
     img_size: tuple[int, int] = (224, 224),
     num_workers: int = 4,
-    use_cutmix: bool = False,
-    use_mixup: bool = False,
-    alpha: float = 1.0,
     seed: int = 42,
 ) -> tuple[DataLoader, DataLoader, dict[str, int]]:
     """
@@ -177,9 +112,6 @@ def load_data(  # noqa: PLR0913
         batch_size (int, optional): Batch size for data loaders.
         img_size (Tuple[int, int], optional): Desired image size as (height, width).
         num_workers (int, optional): Number of subprocesses for data loading.
-        use_cutmix (bool, optional): Whether to apply CutMix augmentation.
-        use_mixup (bool, optional): Whether to apply MixUp augmentation.
-        alpha (float, optional): Parameter for the beta distribution used in CutMix and MixUp.
         seed (int, optional): Random seed for reproducibility.
 
     Returns:
@@ -202,7 +134,8 @@ def load_data(  # noqa: PLR0913
     for label_dir in processed_path.iterdir():
         if label_dir.is_dir():
             label = label_dir.name
-            for img_file in label_dir.glob("*.*"):
+            imgs = list(label_dir.glob("*.*"))
+            for img_file in imgs:
                 if img_file.suffix.lower() in {".png", ".jpg", ".jpeg", ".bmp", ".gif"}:
                     image_paths.append(str(img_file))
                     labels.append(label)
@@ -248,29 +181,18 @@ def load_data(  # noqa: PLR0913
             ),
         ],
     )
-
-    # Initialize DataAugmentor if necessary
-    augmentor = DataAugmentor(img_size=img_size) if use_cutmix or use_mixup else None
-
     train_dataset = PokemonDataset(
         image_paths=train_paths,
         labels=train_labels,
         augment=True,
         transform=transform_train,
-        augmentor=augmentor,
+        augmentor=None,
     )
     val_dataset = PokemonDataset(
         image_paths=val_paths,
         labels=val_labels,
         augment=False,
         transform=transform_val,
-    )
-
-    partial_collate_fn = partial(
-        collate_fn,
-        use_cutmix=use_cutmix,
-        use_mixup=use_mixup,
-        alpha=alpha,
     )
 
     train_loader = DataLoader(
@@ -280,7 +202,7 @@ def load_data(  # noqa: PLR0913
         num_workers=num_workers,
         pin_memory=True,
         prefetch_factor=2,
-        collate_fn=partial_collate_fn,
+        collate_fn=collate_fn,
     )
     val_loader = DataLoader(
         dataset=val_dataset,
@@ -289,7 +211,7 @@ def load_data(  # noqa: PLR0913
         num_workers=num_workers,
         pin_memory=True,
         prefetch_factor=2,
-        collate_fn=partial_collate_fn,
+        collate_fn=collate_fn,
     )
 
     logging.info(

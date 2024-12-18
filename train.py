@@ -7,18 +7,18 @@ import numpy as np
 import torch
 import yaml
 from sklearn.utils.class_weight import compute_class_weight
+from timm.data import Mixup  # New: Using Mixup from timm
 from torch import nn, optim
 from torch.amp import GradScaler, autocast
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from src.data.data_loader import collate_fn, load_data
+from src.data.data_loader import load_data
 from src.models.model import KantoDexClassifier
 from src.utils.helpers import save_checkpoint
 from src.utils.metrics import MetricsCalculator
 from src.visualization.tensorboard_logger import TensorBoardLogger
-from src.visualization.visualize_model import visualize_model_structure
 
 
 def get_class_weights(labels: list[int], num_classes: int, device: torch.device) -> torch.Tensor:
@@ -406,9 +406,7 @@ def train_epoch(  # noqa: PLR0913
     scaler: GradScaler,
     metrics_calculator: MetricsCalculator,
     tensorboard_logger: TensorBoardLogger | None = None,
-    use_cutmix: bool = False,
-    use_mixup: bool = False,
-    alpha: float = 1.0,
+    mixup_fn: Mixup | None = None,
     epoch: int = 0,
 ) -> tuple[float, float]:
     """
@@ -424,9 +422,7 @@ def train_epoch(  # noqa: PLR0913
         metrics_calculator (MetricsCalculator): Instance to calculate training metrics.
         tensorboard_logger (Optional[TensorBoardLogger], optional): Logger for TensorBoard.
             Default is `None`.
-        use_cutmix (bool, optional): Flag to enable CutMix augmentation. Default is `False`.
-        use_mixup (bool, optional): Flag to enable MixUp augmentation. Default is `False`.
-        alpha (float, optional): Alpha parameter for CutMix and MixUp. Default is `1.0`.
+        mixup_fn (Optional[Mixup], optional): Mixup or CutMix function. Default is `None`.
         epoch (int, optional): Current epoch number for logging purposes. Default is `0`.
 
     Returns:
@@ -436,17 +432,15 @@ def train_epoch(  # noqa: PLR0913
     model.train()
     running_loss = 0.0
 
-    for batch_idx, batch in enumerate(tqdm(dataloader, desc="Training", unit="batch", leave=False)):
-        images, labels = batch
-
-        if use_cutmix or use_mixup:
-            images, labels = collate_fn(images, labels, use_cutmix, use_mixup, alpha)
-
+    for batch_idx, (images, labels) in enumerate(tqdm(dataloader, desc="Training", unit="batch")):
         images = images.to(device)
         labels = labels.to(device).long()
 
-        optimizer.zero_grad()
+        # Apply Mixup or CutMix if enabled via timm Mixup
+        if mixup_fn is not None:
+            images, labels = mixup_fn(images, labels)
 
+        optimizer.zero_grad()
         with autocast(device.type, enabled=device.type == "cuda"):
             outputs = model(images)
             loss = criterion(outputs, labels)
@@ -456,9 +450,18 @@ def train_epoch(  # noqa: PLR0913
         scaler.update()
 
         running_loss += loss.item()
-        metrics_calculator.update(outputs, labels)
 
+        # If using mixup, labels may be soft. Metrics calculator expects one-hot or hard labels.
+        # For accuracy, if mixup is used, we typically measure after the epoch without the mixup label transformations.
+        # For simplicity here, we assume normal calculation if no mixup or approximate if mixup is applied.
+        if mixup_fn is not None:
+            # Convert soft labels to hard labels for metric calculation
+            _, hard_labels = torch.max(labels, dim=1)
+            metrics_calculator.update(outputs, hard_labels)
+        else:
+            metrics_calculator.update(outputs, labels)
         # Log batch-wise loss every 10 batches
+
         if tensorboard_logger and (batch_idx % 10 == 0):
             global_step = epoch * len(dataloader) + batch_idx
             tensorboard_logger.add_scalar(
@@ -484,6 +487,7 @@ def train_epoch(  # noqa: PLR0913
 def validate(  # noqa: PLR0913
     model: nn.Module,
     dataloader: DataLoader,
+    criterion: nn.Module,
     device: torch.device,
     metrics_calculator: MetricsCalculator,
     tensorboard_logger: TensorBoardLogger | None = None,
@@ -496,6 +500,7 @@ def validate(  # noqa: PLR0913
     Args:
         model (nn.Module): The model to validate.
         dataloader (DataLoader): DataLoader for validation data.
+        criterion (nn.Module): Loss function.
         device (torch.device): Device to perform validation on (CPU or CUDA).
         metrics_calculator (MetricsCalculator): Instance to calculate validation metrics.
         tensorboard_logger (Optional[TensorBoardLogger], optional): Logger for TensorBoard.
@@ -510,13 +515,18 @@ def validate(  # noqa: PLR0913
     """
     model.eval()
     metrics_calculator.reset()
+
+    running_val_loss = 0.0
     with torch.no_grad():
-        for batch in tqdm(dataloader, desc="Validation", unit="batch", leave=False):
-            images, labels = batch
+        for images, labels in tqdm(dataloader, desc="Validation", unit="batch"):
             images = images.to(device)
             labels = labels.to(device)
             outputs = model(images)
+            loss = criterion(outputs, labels)
+            running_val_loss += loss.item()
             metrics_calculator.update(outputs, labels)
+
+    avg_val_loss = running_val_loss / len(dataloader)
     metrics = metrics_calculator.compute()
 
     if tensorboard_logger:
@@ -524,31 +534,33 @@ def validate(  # noqa: PLR0913
         precision = metrics.get("precision", 0.0)
         recall = metrics.get("recall", 0.0)
         f1_score = metrics.get("f1", 0.0)
+        auroc_score = metrics.get("auroc", 0.0)
 
         tensorboard_logger.add_scalar("Epoch Validation Accuracy", epoch_val_accuracy, epoch + 1)
-        tensorboard_logger.add_scalar("Precision", precision, epoch + 1)
-        tensorboard_logger.add_scalar("Recall", recall, epoch + 1)
-        tensorboard_logger.add_scalar("F1 Score", f1_score, epoch + 1)
+        tensorboard_logger.add_scalar("Epoch Validation Loss", avg_val_loss, epoch + 1)
+        tensorboard_logger.add_scalar("Epoch Validation Precision", precision, epoch + 1)
+        tensorboard_logger.add_scalar("Epoch Validation Recall", recall, epoch + 1)
+        tensorboard_logger.add_scalar("Epoch Validation F1 Score", f1_score, epoch + 1)
+        tensorboard_logger.add_scalar("Epoch Validation Auroc score", auroc_score, epoch + 1)
 
         if idx_to_label:
             tensorboard_logger.add_class_accuracy(
-                class_names=list(idx_to_label.values()),
+                class_names=idx_to_label,
                 class_accuracy=metrics.get("per_class_accuracy", {}),
                 global_step=epoch,
             )
-            # List worst performing classes with names
-            worst_performing = metrics.get("worst_performing_classes", {})
-            worst_performing_named = {
-                idx_to_label.get(k, f"Class_{k}"): v for k, v in worst_performing.items()
-            }
-            logging.info(f"Worst performing classes: {worst_performing_named}")
-            # Save to TensorBoard
+            tensorboard_logger.add_confusion_matrix(
+                confusion_matrix=metrics.get("confusion_matrix", np.array([])),
+                class_names=idx_to_label,
+                global_step=epoch,
+            )
+            worst_performing = metrics.get("worst_performing_classes", [])[:15]
+            logging.info(f"Worst performing classes: {worst_performing}")
             tensorboard_logger.add_text(
                 "Worst Performing Classes",
-                str(worst_performing_named),
+                str(worst_performing),
                 epoch,
             )
-            # Add each class accuracy to TensorBoard
             for idx, acc in metrics.get("per_class_accuracy", {}).items():
                 class_name = idx_to_label.get(idx, f"Class_{idx}")
                 tensorboard_logger.add_scalar(
@@ -557,30 +569,29 @@ def validate(  # noqa: PLR0913
                     epoch,
                 )
         logging.info(
-            f"Precision: {precision:.2f}%, Recall: {recall:.2f}%, F1 Score: {f1_score:.2f}%",
+            f"Epoch Validation Loss: {avg_val_loss:.4f}, Precision: {precision:.2f}%, "
+            f"Recall: {recall:.2f}%, F1 Score: {f1_score:.2f}%, AUROC: {auroc_score:.2f}%",
         )
 
     return metrics.get("accuracy", 0.0)
 
 
 def main() -> None:  # noqa: PLR0915, C901, PLR0912
+    setup_logging()
     logging.info("Starting training process...")
     args = parse_args()
-    setup_logging()
+
     config = load_config(args.config)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logging.info(f"Using device: {device}")
 
-    # Load actual training and validation data to determine number of classes
-    train_loader_dummy, val_loader_dummy, label_to_idx_dummy = load_data(
+    # Load dummy data to get number of classes
+    _, val_loader_dummy, label_to_idx_dummy = load_data(
         processed_path=config["data"]["processed_path"],
         test_size=config["data"]["test_size"],
         batch_size=1,
         img_size=tuple(config["data"]["img_size"]),
         num_workers=config["data"]["num_workers"],
-        use_cutmix=False,
-        use_mixup=False,
-        alpha=1.0,
     )
     num_classes = len(label_to_idx_dummy)
     logging.info(f"Number of classes: {num_classes}")
@@ -588,9 +599,11 @@ def main() -> None:  # noqa: PLR0915, C901, PLR0912
     # Initialize model
     model = initialize_model(config, num_classes, device)
 
-    # Initialize TensorBoard Logger
+    # TensorBoard Logger
     tensorboard_logger = None
     if args.enable_tensorboard:
+        from src.visualization.tensorboard_logger import TensorBoardLogger
+
         tensorboard_logger = TensorBoardLogger(
             log_dir=args.tensorboard_log_dir,
             comment=args.tensorboard_comment,
@@ -600,39 +613,33 @@ def main() -> None:  # noqa: PLR0915, C901, PLR0912
             filename_suffix=args.tensorboard_filename_suffix,
             enabled=True,
         )
-        # Add model graph with the actual model and a sample input
         try:
-            sample_images, _ = next(iter(train_loader_dummy))
+            sample_images, _ = next(iter(val_loader_dummy))
             sample_images = sample_images.to(device)
             tensorboard_logger.add_graph(model, sample_images)
             logging.info("Model graph added to TensorBoard.")
         except StopIteration:
-            logging.warning("Training data loader is empty. Skipping TensorBoard graph addition.")
+            logging.warning("No samples in validation loader dummy.")
 
-    # Load actual training and validation data
+    # Load actual train and val loaders
     train_loader, val_loader, label_to_idx = load_data(
         processed_path=config["data"]["processed_path"],
         test_size=config["data"]["test_size"],
         batch_size=config["training"].get("batch_size", 32),
         img_size=tuple(config["data"]["img_size"]),
         num_workers=config["data"]["num_workers"],
-        use_cutmix=config["augmentation"].get("use_cutmix", False),
-        use_mixup=config["augmentation"].get("use_mixup", False),
-        alpha=config["augmentation"].get("alpha", 1.0),
     )
     idx_to_label = {v: k for k, v in label_to_idx.items()}
 
-    # Initialize optimizer and scheduler
     optimizer = initialize_optimizer(config, model)
     scheduler = initialize_scheduler(config, optimizer)
 
-    # Loss function with Label Smoothing
+    # Loss with Label Smoothing or FocalLoss with class weights
     label_smoothing = config["training"].get("label_smoothing", 0.0)
     if label_smoothing > 0.0:
         criterion = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
         logging.info(f"Using CrossEntropyLoss with label smoothing: {label_smoothing}")
     else:
-        # Initialize class weights
         all_train_labels = []
         for _, labels in train_loader:
             all_train_labels.extend(labels.tolist())
@@ -648,15 +655,26 @@ def main() -> None:  # noqa: PLR0915, C901, PLR0912
 
     # Mixed Precision Scaler
     scaler = GradScaler(enabled=device.type == "cuda")
-
     # Early Stopping parameters
     early_stopping_patience = config["training"].get("early_stopping_patience", 10)
     epochs_no_improve = 0
     best_accuracy = 0.0
 
-    # Resume training if flag is set
-    start_epoch = 0
-    if args.resume:
+    # Mixup initialization if needed
+    use_mixup = config["augmentation"].get("use_mixup", False)
+    use_cutmix = config["augmentation"].get("use_cutmix", False)
+    mixup_fn = None
+    if use_mixup or use_cutmix:
+        # timm Mixup handles both based on provided arguments
+        mixup_fn = Mixup(
+            mixup_alpha=config["augmentation"].get("alpha", 1.0) if use_mixup else 0.0,
+            cutmix_alpha=config["augmentation"].get("alpha", 1.0) if use_cutmix else 0.0,
+            label_smoothing=label_smoothing,
+            num_classes=num_classes,
+        )
+        logging.info("Using Mixup/CutMix from timm.")
+
+    if args.resume or config["training"].get("resume", False):
         start_epoch, best_accuracy = resume_training(
             config,
             model,
@@ -665,16 +683,18 @@ def main() -> None:  # noqa: PLR0915, C901, PLR0912
             scaler,
             device,
         )
+    else:
+        start_epoch = 0
 
-    # Visualize model structure if flag is set
     if args.visualize_model:
+        from src.visualization.visualize_model import visualize_model_structure
+
         visualize_model_structure(model)
 
     num_epochs = config["training"].get("epochs", 100)
     for epoch in range(start_epoch, num_epochs):
         logging.info(f"Starting epoch {epoch + 1}/{num_epochs}")
 
-        # Train
         train_loss, train_accuracy = train_epoch(
             model=model,
             dataloader=train_loader,
@@ -684,9 +704,7 @@ def main() -> None:  # noqa: PLR0915, C901, PLR0912
             scaler=scaler,
             metrics_calculator=metrics_calculator,
             tensorboard_logger=tensorboard_logger,
-            use_cutmix=config["augmentation"].get("use_cutmix", False),
-            use_mixup=config["augmentation"].get("use_mixup", False),
-            alpha=config["augmentation"].get("alpha", 1.0),
+            mixup_fn=mixup_fn,
             epoch=epoch + 1,
         )
         logging.info(
@@ -694,21 +712,18 @@ def main() -> None:  # noqa: PLR0915, C901, PLR0912
             f"Loss: {train_loss:.4f}, Accuracy: {train_accuracy:.2f}%",
         )
 
-        # Calculate additional metrics
         metrics = metrics_calculator.compute()
         precision = metrics.get("precision", 0.0)
         recall = metrics.get("recall", 0.0)
         f1_score = metrics.get("f1", 0.0)
-
         logging.info(
             f"Precision: {precision:.2f}%, Recall: {recall:.2f}%, F1 Score: {f1_score:.2f}%",
         )
 
-        # Log additional metrics to TensorBoard
         if tensorboard_logger:
-            tensorboard_logger.add_scalar("Precision", precision, epoch + 1)
-            tensorboard_logger.add_scalar("Recall", recall, epoch + 1)
-            tensorboard_logger.add_scalar("F1 Score", f1_score, epoch + 1)
+            tensorboard_logger.add_scalar("Training Precision", precision, epoch + 1)
+            tensorboard_logger.add_scalar("Training Recall", recall, epoch + 1)
+            tensorboard_logger.add_scalar("Training F1 Score", f1_score, epoch + 1)
 
         # Scheduler step
         if scheduler:
@@ -719,12 +734,12 @@ def main() -> None:  # noqa: PLR0915, C901, PLR0912
             current_lr = optimizer.param_groups[0]["lr"]
             logging.info(f"Learning Rate: {current_lr}")
             if tensorboard_logger:
-                tensorboard_logger.add_scalar("Learning Rate", current_lr, epoch + 1)
+                tensorboard_logger.add_scalar("Training Learning Rate", current_lr, epoch + 1)
 
-        # Validate
         val_accuracy = validate(
             model=model,
             dataloader=val_loader,
+            criterion=criterion,
             device=device,
             metrics_calculator=metrics_calculator,
             tensorboard_logger=tensorboard_logger,
@@ -759,7 +774,6 @@ def main() -> None:  # noqa: PLR0915, C901, PLR0912
             best_accuracy=best_accuracy,
         )
 
-        # Early Stopping
         if epochs_no_improve >= early_stopping_patience:
             logging.info("Early stopping triggered.")
             break

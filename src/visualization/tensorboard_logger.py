@@ -1,6 +1,8 @@
 from typing import Any
 
 import matplotlib.pyplot as plt
+import numpy as np
+import seaborn as sns
 import torch
 from torch.utils.tensorboard import SummaryWriter
 
@@ -155,6 +157,46 @@ class TensorBoardLogger:
         if self.enabled and self.writer is not None:
             self.writer.add_graph(model, input_to_model, verbose=verbose)
 
+    def add_confusion_matrix(
+        self,
+        confusion_matrix: np.ndarray,
+        class_names: dict[int, str],
+        global_step: int = 0,
+        normalize: bool = True,
+        title: str = "Confusion Matrix",
+    ) -> None:
+        """
+        Log a confusion matrix as a heatmap to TensorBoard.
+
+        Args:
+            confusion_matrix (np.ndarray): The confusion matrix to visualize.
+            class_names (Dict[int, str]): Mapping from class indices to class names.
+            global_step (int, optional): Global step value to associate with the logged data.
+            normalize (bool, optional): Whether to normalize the confusion matrix.
+            title (str, optional): Title of the heatmap.
+
+        """
+        if self.enabled and self.writer is not None:
+            if normalize:
+                cm = confusion_matrix.astype("float") / confusion_matrix.sum(axis=1)[:, np.newaxis]
+            else:
+                cm = confusion_matrix
+            plt.figure(figsize=(10, 8))
+            sns.heatmap(
+                cm,
+                annot=True,
+                fmt=".2f" if normalize else "d",
+                xticklabels=list(class_names.values()),
+                yticklabels=list(class_names.values()),
+                cmap="Blues",
+            )
+            plt.ylabel("True Label")
+            plt.xlabel("Predicted Label")
+            plt.title(title)
+            plt.tight_layout()
+            self.writer.add_figure(title, plt.gcf(), global_step)
+            plt.close()
+
     def add_figure(
         self,
         tag: str,
@@ -178,7 +220,7 @@ class TensorBoardLogger:
     def add_class_accuracy(
         self,
         class_names: dict[int, str],
-        class_accuracy: list[float],
+        class_accuracy: dict[int, float],  # Changed type hint to dict
         global_step: int = 0,
         title: str = "Per-Class Accuracy",
     ) -> None:
@@ -186,16 +228,19 @@ class TensorBoardLogger:
         Log per-class accuracy as a bar chart to TensorBoard.
 
         Args:
-            class_names (Dict[str, int]): Dictionary mapping class names to their indices.
-            class_accuracy (List[float]): Corresponding accuracies for each class.
+            class_names (Dict[int, str]): Dictionary mapping class indices to their names.
+            class_accuracy (Dict[int, float]): Corresponding accuracies for each class.
             global_step (int, optional): Global step value to associate with the logged data.
             title (str, optional): Title of the bar chart.
 
         """
         if self.enabled and self.writer is not None:
-            fig, ax = plt.subplots(figsize=(10, 6))
-            class_names = list(class_names.keys())
-            ax.bar(class_names, class_accuracy, color="skyblue")
+            class_indices = list(class_accuracy.keys())
+            accuracies = list(class_accuracy.values())
+            labels = [class_names.get(idx, f"Class_{idx}") for idx in class_indices]
+
+            fig, ax = plt.subplots(figsize=(12, 8))
+            sns.barplot(x=labels, y=accuracies, palette="viridis", ax=ax)
             ax.set_xlabel("Classes")
             ax.set_ylabel("Accuracy (%)")
             ax.set_title(title)

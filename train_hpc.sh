@@ -84,41 +84,10 @@ if [ "$queue_count" -ne 1 ]; then
 fi
 
 # Load modules based on the selected queue
-# You need to manually uncomment the queue and its corresponding module loads below
 
-# =============================================================================
-# Uncomment the module load commands corresponding to your selected queue
-# =============================================================================
-
-# For gpua100: Tesla A100 PCIE 40 GB & 80 GB
-# If you selected gpua100, uncomment the following lines:
 module load cuda/12.6.2
 module load intel/2024.2.mpi
 module load mpi/5.0.5-gcc-14.2.0-binutils-2.43 
-
-# For gpuv100: Tesla V100 16 GB, 32 GB
-# If you selected gpuv100, uncomment the following lines:
-# module load cuda/11.6
-# module load intel/2024.2.187.mpi
-# module load openmpi/5.0.3-gcc-12.4.0
-
-# For gpua10: Tesla A10 PCIE 24 GB
-# If you selected gpua10, uncomment the following lines:
-# module load cuda/12.6.2
-# module load intel/2024.2.187.mpi
-# module load openmpi/5.0.3-gcc-12.4.0
-
-# For gpua40: Tesla A40 48 GB with NVLink
-# If you selected gpua40, uncomment the following lines:
-# module load cuda/12.6.2
-# module load intel/2024.2.187.mpi
-# module load openmpi/5.0.3-gcc-12.4.0
-
-# For gpuamd: AMD Radeon Instinct MI25 16 GB
-# If you selected gpuamd, uncomment the following lines:
-# module load cuda/12.6.2
-# module load intel/2024.2.187.mpi
-# module load openmpi/5.0.3-gcc-12.4.0
 
 # =============================================================================
 # Conda Environment Setup

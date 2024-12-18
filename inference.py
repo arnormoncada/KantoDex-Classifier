@@ -214,16 +214,14 @@ def overlay_image_alpha(img, img_overlay, x, y, alpha_mask):
         alpha_mask = alpha_mask[: img.shape[0] - y1, :]
         y2 = img.shape[0]
 
-    blended = (
-        alpha_mask * img_overlay[..., :3] + (1 - alpha_mask) * img[y1:y2, x1:x2, :3]
-    ).astype(np.uint8)
+    blended = (alpha_mask * img_overlay[..., :3] + (1 - alpha_mask) * img[y1:y2, x1:x2, :3]).astype(
+        np.uint8
+    )
     img[y1:y2, x1:x2, :3] = blended
     return img
 
 
-def wrap_text(
-    img, text, org, font, font_scale, color, thickness, max_width=380, line_height=30
-):
+def wrap_text(img, text, org, font, font_scale, color, thickness, max_width=380, line_height=30):
     words = text.split(" ")
     current_line = ""
     lines = []
@@ -348,14 +346,10 @@ def main():
                 break
 
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            frame_resized = cv2.resize(
-                frame_rgb, (224, 224), interpolation=cv2.INTER_LINEAR
-            )
+            frame_resized = cv2.resize(frame_rgb, (224, 224), interpolation=cv2.INTER_LINEAR)
 
             frame_tensor = torch.from_numpy(frame_resized).to(device)
-            frame_tensor = (
-                frame_tensor.half() if device.type == "cuda" else frame_tensor.float()
-            )
+            frame_tensor = frame_tensor.half() if device.type == "cuda" else frame_tensor.float()
 
             frame_tensor = frame_tensor.permute(2, 0, 1) / 255.0
             frame_tensor = (frame_tensor - mean[..., None, None]) / std[..., None, None]
@@ -474,16 +468,14 @@ def main():
                 else:
                     end_x = min(pokeball_x + new_width, display_frame.shape[1])
                     end_y = min(pokeball_y + new_height, display_frame.shape[0])
-                    display_frame[pokeball_y:end_y, pokeball_x:end_x] = (
-                        rotated_pokeball[: end_y - pokeball_y, : end_x - pokeball_x, :3]
-                    )
+                    display_frame[pokeball_y:end_y, pokeball_x:end_x] = rotated_pokeball[
+                        : end_y - pokeball_y, : end_x - pokeball_x, :3
+                    ]
 
             # Display Pokémon image if available and not unknown
             if stable_prediction in pokemon_images and stable_prediction != "Unknown":
                 poke_img = pokemon_images[stable_prediction]
-                poke_img_display = cv2.resize(
-                    poke_img, (200, 200), interpolation=cv2.INTER_LINEAR
-                )
+                poke_img_display = cv2.resize(poke_img, (200, 200), interpolation=cv2.INTER_LINEAR)
                 if poke_img_display.shape[2] == 4:
                     alpha_channel = (poke_img_display[..., 3] / 255.0) * fade_in_value
                     alpha_channel = alpha_channel[..., None]
@@ -538,9 +530,7 @@ def main():
                 line_y += line_height
 
                 # Types
-                types_str = ", ".join(
-                    t.capitalize() for t in current_pokemon_data.types
-                )
+                types_str = ", ".join(t.capitalize() for t in current_pokemon_data.types)
                 cv2.putText(
                     info_panel,
                     f"Types: {types_str}",

@@ -4,6 +4,10 @@
 
 Welcome to the **KantoDex-Classifier** project! This repository is designed to identify Generation I Pokémon using deep neural networks. 
 
+## 📈 Evaluation
+
+An example of the training and outcome of the project, done for 50 epochs, is shown in a jupyter notebook. The notebook can be found in the repository as `results.ipynb`. There are also several notebooks under the `notebooks/` directory that show the results from 3 different models, including the custom model, ResNet50 pretrained and ResNet50 from scratch. All of the results can be found in this google drive link, along with the best checkpoints and exact code used to train the models: [Google Drive](https://drive.google.com/drive/folders/1Yfs0hSYw2ONnovpgl5WpRgFUq0lZQiSN?usp=drive_link).
+
 ## 📁 Project Structure
 
 ```
